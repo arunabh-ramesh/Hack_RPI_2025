@@ -249,32 +249,36 @@ function App() {
         }
 
         const code = groupCode.toUpperCase();
-        setCurrentGroup(code);
-        // Fetch meta name if exists
-        try {
-            const metaSnap = await database.ref(`groups/${code}/meta/name`).once('value');
-            if (metaSnap.exists()) {
-                setCurrentGroupName(metaSnap.val());
-            } else {
-                setCurrentGroupName(null);
-            }
-        } catch (e) {
-            console.warn('Could not load group name:', e);
-        }
         
-        // Add user to group members
-        await database.ref(`groups/${code}/members/${user.uid}`).set({
-            name: username,
-            sport: sport,
-            joinedAt: Date.now()
-        });
+        try {
+            // Fetch meta name if exists
+            const metaSnap = await database.ref(`groups/${code}/meta/name`).once('value');
+            let groupName = null;
+            if (metaSnap.exists()) {
+                groupName = metaSnap.val();
+            }
+            
+            // Add user to group members
+            await database.ref(`groups/${code}/members/${user.uid}`).set({
+                name: username,
+                sport: sport,
+                joinedAt: Date.now()
+            });
 
-        // Presence cleanup on disconnect
-        database.ref(`groups/${code}/members/${user.uid}`).onDisconnect().remove();
-        database.ref(`groups/${code}/locations/${user.uid}`).onDisconnect().remove();
+            // Presence cleanup on disconnect
+            database.ref(`groups/${code}/members/${user.uid}`).onDisconnect().remove();
+            database.ref(`groups/${code}/locations/${user.uid}`).onDisconnect().remove();
 
-        // Start tracking location
-        startLocationTracking();
+            // Only update state after successful database operations
+            setCurrentGroup(code);
+            setCurrentGroupName(groupName);
+
+            // Start tracking location
+            startLocationTracking();
+        } catch (e) {
+            console.error('Error joining group:', e);
+            alert('Failed to join group. Please try again.');
+        }
     };
 
     // Leave group
