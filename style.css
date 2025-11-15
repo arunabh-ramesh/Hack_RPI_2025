@@ -223,6 +223,14 @@ h3 {
     padding: 10px;
     background: #f8f8f8;
     border-radius: 10px;
+    cursor: pointer;
+    transition: all 0.2s;
+}
+
+.member-item:hover {
+    background: #e8e8f8;
+    transform: translateX(4px);
+    box-shadow: 0 2px 8px rgba(102, 126, 234, 0.2);
 }
 
 .sport-icon {
