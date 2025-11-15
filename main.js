@@ -30,6 +30,10 @@ function App() {
     const [simIntervalId, setSimIntervalId] = useState(null); // simulation interval id
     const [groupName, setGroupName] = useState(''); // name to create
     const [currentGroupName, setCurrentGroupName] = useState(null); // name after join/create
+    const [showLocationPrompt, setShowLocationPrompt] = useState(false);
+    const [locationError, setLocationError] = useState('');
+    const [showLocationHelp, setShowLocationHelp] = useState(false);
+    const [detectedPlatform, setDetectedPlatform] = useState('');
     const mapRef = useRef(null);
     const mapInstanceRef = useRef(null);
     const markersRef = useRef({});
@@ -125,6 +129,18 @@ function App() {
         return () => window.removeEventListener('resize', handleResize);
     }, []);
 
+    // Detect platform to tailor location help
+    useEffect(() => {
+        const ua = (navigator.userAgent || '').toLowerCase();
+        let platform = 'other';
+        if (/iphone|ipad|ipod/.test(ua)) platform = 'ios';
+        else if (/android/.test(ua)) platform = 'android';
+        else if (/safari/.test(ua) && !/chrome|crios|android/.test(ua)) platform = 'safari';
+        else if (/edg\//.test(ua)) platform = 'edge';
+        else if (/chrome|crios/.test(ua)) platform = 'chrome';
+        setDetectedPlatform(platform);
+    }, []);
+
     // Fallback cleanup on browser/tab close
     useEffect(() => {
         if (!currentGroup || !user) return;
@@ -200,8 +216,9 @@ function App() {
         console.log('User:', user?.uid, 'Group:', currentGroup, 'Username:', username);
         
         if (!navigator.geolocation) {
-            console.log('Geolocation not supported, using simulated location');
-            useSimulatedLocation();
+            console.log('Geolocation not supported, prompting user');
+            setLocationError('Your browser does not support location or it is disabled.');
+            setShowLocationPrompt(true);
             return;
         }
 
@@ -231,8 +248,12 @@ function App() {
             },
             (error) => {
                 console.error('Error getting real location:', error);
-                console.log('Falling back to simulated location');
-                useSimulatedLocation();
+                let msg = 'Unable to access your location.';
+                if (error.code === 1) msg = 'Permission denied. Please allow location access in your browser settings.';
+                else if (error.code === 2) msg = 'Position unavailable. Please check your GPS/Location services.';
+                else if (error.code === 3) msg = 'Location request timed out. Please try again.';
+                setLocationError(msg);
+                setShowLocationPrompt(true);
             },
             {
                 enableHighAccuracy: true,
@@ -244,7 +265,7 @@ function App() {
         setWatchId(id);
     };
 
-    // Use simulated location as fallback
+    // Use simulated location as fallback (not used by default; kept for demos)
     const useSimulatedLocation = () => {
         const updateSimulatedLocation = () => {
             const simulatedLat = 50.1163 + (Math.random() - 0.5) * 0.01;
@@ -430,8 +451,8 @@ function App() {
         }
     };
 
-    // Render username/login screen (force if username not set)
-    if (!user || !username) {
+    // Render username/login screen (only proceed after explicit sign-in)
+    if (!user) {
         return (
             <div className="container">
                 <div className="auth-container">
@@ -461,7 +482,7 @@ function App() {
                     </div>
                     
                     <button onClick={handleSignIn} className="btn btn-primary">
-                        {user ? 'Continue' : 'Get Started'}
+                        Get Started
                     </button>
                 </div>
             </div>
@@ -531,6 +552,117 @@ function App() {
             <div className="map-container">
                 <div ref={mapRef} id="map"></div>
             </div>
+
+            {showLocationPrompt && (
+                <div style={{
+                    position: 'fixed',
+                    inset: 0,
+                    background: 'rgba(0,0,0,0.5)',
+                    display: 'flex',
+                    alignItems: 'center',
+                    justifyContent: 'center',
+                    zIndex: 9999
+                }}>
+                    <div style={{
+                        background: '#fff',
+                        borderRadius: 12,
+                        padding: 20,
+                        width: '90%',
+                        maxWidth: 420,
+                        boxShadow: '0 10px 30px rgba(0,0,0,0.2)'
+                    }}>
+                        <h3 style={{ marginBottom: 10 }}>Allow Location Access</h3>
+                        <p style={{ marginBottom: 16, color: '#555' }}>
+                            {locationError || 'To share your live position with the group, please allow location access in your browser settings.'}
+                        </p>
+                        <button
+                            onClick={() => setShowLocationHelp((v) => !v)}
+                            className="btn btn-secondary"
+                            style={{ width: '100%', marginBottom: 10 }}
+                            title="Show quick steps for your browser/device"
+                        >
+                            {showLocationHelp ? 'Hide help' : 'How to enable location?'}
+                        </button>
+                        {showLocationHelp && (
+                            <div style={{
+                                background: '#f8f8f8',
+                                border: '1px solid #e0e0e0',
+                                borderRadius: 10,
+                                padding: 12,
+                                marginBottom: 12
+                            }}>
+                                {/* Chrome (Desktop) */}
+                                <details open={detectedPlatform === 'chrome'} style={{ marginBottom: 8 }}>
+                                    <summary style={{ cursor: 'pointer', fontWeight: 600 }}>Chrome (Desktop)</summary>
+                                    <ul style={{ marginLeft: 18, marginTop: 6 }}>
+                                        <li>Click the lock icon in the address bar.</li>
+                                        <li>Permissions → Location → Allow.</li>
+                                        <li>Or go to chrome://settings/content/location and add this site to Allow.</li>
+                                    </ul>
+                                </details>
+                                {/* Safari (macOS) */}
+                                <details open={detectedPlatform === 'safari'} style={{ marginBottom: 8 }}>
+                                    <summary style={{ cursor: 'pointer', fontWeight: 600 }}>Safari (macOS)</summary>
+                                    <ul style={{ marginLeft: 18, marginTop: 6 }}>
+                                        <li>Safari → Settings → Websites → Location.</li>
+                                        <li>Find this site in the list and set to Allow.</li>
+                                        <li>Reload the page and try again.</li>
+                                    </ul>
+                                </details>
+                                {/* iOS (Safari/Chrome) */}
+                                <details open={detectedPlatform === 'ios'} style={{ marginBottom: 8 }}>
+                                    <summary style={{ cursor: 'pointer', fontWeight: 600 }}>iPhone/iPad (iOS)</summary>
+                                    <ul style={{ marginLeft: 18, marginTop: 6 }}>
+                                        <li>Open Settings → Privacy & Security → Location Services → On.</li>
+                                        <li>Scroll to Safari (or your browser) → Allow Location Access → While Using.</li>
+                                        <li>Enable Precise Location for best accuracy.</li>
+                                        <li>Return to the website and tap Try Again.</li>
+                                    </ul>
+                                </details>
+                                {/* Android (Chrome) */}
+                                <details open={detectedPlatform === 'android'} style={{ marginBottom: 8 }}>
+                                    <summary style={{ cursor: 'pointer', fontWeight: 600 }}>Android (Chrome)</summary>
+                                    <ul style={{ marginLeft: 18, marginTop: 6 }}>
+                                        <li>Ensure system location is On: Settings app → Location → On.</li>
+                                        <li>In Chrome: tap the lock icon → Permissions → Location → Allow.</li>
+                                        <li>Or Chrome Settings → Site settings → Location → Allow for this site.</li>
+                                    </ul>
+                                </details>
+                                {/* Edge (Desktop) */}
+                                <details open={detectedPlatform === 'edge'} style={{ marginBottom: 8 }}>
+                                    <summary style={{ cursor: 'pointer', fontWeight: 600 }}>Edge (Desktop)</summary>
+                                    <ul style={{ marginLeft: 18, marginTop: 6 }}>
+                                        <li>Click the lock icon in the address bar.</li>
+                                        <li>Permissions → Location → Allow.</li>
+                                        <li>Or edge://settings/content/location and allow this site.</li>
+                                    </ul>
+                                </details>
+                            </div>
+                        )}
+                        <div style={{ display: 'flex', gap: 10, justifyContent: 'flex-end' }}>
+                            <button
+                                className="btn btn-secondary"
+                                onClick={() => setShowLocationPrompt(false)}
+                                style={{ width: 'auto' }}
+                            >
+                                Not Now
+                            </button>
+                            <button
+                                className="btn btn-primary"
+                                onClick={() => {
+                                    setShowLocationPrompt(false);
+                                    // Retry requesting location
+                                    stopLocationTracking();
+                                    startLocationTracking();
+                                }}
+                                style={{ width: 'auto' }}
+                            >
+                                Try Again
+                            </button>
+                        </div>
+                    </div>
+                </div>
+            )}
             
             <div className="members-panel">
                 <h3>Group Members ({Object.keys(groupMembers).length})</h3>
