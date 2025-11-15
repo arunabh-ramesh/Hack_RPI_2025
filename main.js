@@ -43,18 +43,18 @@ function App() {
     const [detectedPlatform, setDetectedPlatform] = useState('');
     const [pinMode, setPinMode] = useState(false);
     const [groupPins, setGroupPins] = useState({});
-    const mapRef = useRef(null);
+    const [showPinModal, setShowPinModal] = useState(false);
+    const [pendingPinLocation, setPendingPinLocation] = useState(null); // { lat, lng }
+    const [pinLabel, setPinLabel] = useState('');
+    const [pinTime, setPinTime] = useState(''); // HH:MM format
     const mapInstanceRef = useRef(null);
     const markersRef = useRef({});
     const pinMarkersRef = useRef({});
     const pinModeRef = useRef(false);
     const mapClickHandlerRef = useRef(null);
+    const mapRef = useRef(null);
 
-    // Last-known local position (for debugging on phones)
-    const [lastPosition, setLastPosition] = useState(null); // { lat, lon }
-    const [lastAccuracy, setLastAccuracy] = useState(null);
-    const [lastSource, setLastSource] = useState(null);
-    const [lastLocationTimestamp, setLastLocationTimestamp] = useState(null);
+
 
     // Helper to get a stable uid (may come from auth.currentUser during async sign-in)
     const getUid = () => {
@@ -181,18 +181,15 @@ function App() {
         // Add new handler
         const handler = (e) => {
             if (pinModeRef.current) {
-                const label = prompt('Enter a label for this pin:');
-                if (label && label.trim()) {
-                    const pinId = Date.now().toString();
-                    database.ref(`groups/${currentGroup}/pins/${pinId}`).set({
-                        lat: e.latlng.lat,
-                        lon: e.latlng.lng,
-                        label: label.trim(),
-                        createdBy: username,
-                        createdAt: Date.now()
-                    });
-                    setPinMode(false);
-                }
+                // Store the location and show modal
+                setPendingPinLocation({ lat: e.latlng.lat, lng: e.latlng.lng });
+                setPinLabel('');
+                // Set time to current time in HH:MM format
+                const now = new Date();
+                const hours = String(now.getHours()).padStart(2, '0');
+                const minutes = String(now.getMinutes()).padStart(2, '0');
+                setPinTime(`${hours}:${minutes}`);
+                setShowPinModal(true);
             }
         };
         
@@ -309,6 +306,14 @@ function App() {
             const pins = snapshot.val() || {};
             setGroupPins(pins);
             
+            // Check for expired pins and delete them
+            const now = Date.now();
+            Object.entries(pins).forEach(([pinId, data]) => {
+                if (data.createdAt && data.expiresAt && now > data.expiresAt) {
+                    database.ref(`groups/${currentGroup}/pins/${pinId}`).remove();
+                }
+            });
+            
             // Update pin markers on map
             if (mapInstanceRef.current) {
                 // Clear old pin markers
@@ -318,16 +323,18 @@ function App() {
                 // Add new pin markers
                 Object.entries(pins).forEach(([pinId, data]) => {
                     if (data.lat && data.lon) {
-                        const pinIcon = L.icon({
-                            iconUrl: 'data:image/svg+xml;base64,' + btoa(`
-                                <svg xmlns="http://www.w3.org/2000/svg" width="32" height="40" viewBox="0 0 32 40">
-                                    <path fill="#e74c3c" stroke="#c0392b" stroke-width="2" d="M16 0C9.4 0 4 5.4 4 12c0 8 12 28 12 28s12-20 12-28c0-6.6-5.4-12-12-12z"/>
-                                    <circle cx="16" cy="12" r="6" fill="white"/>
-                                </svg>
-                            `),
-                            iconSize: [32, 40],
-                            iconAnchor: [16, 40],
-                            popupAnchor: [0, -40]
+                        const pinIcon = L.divIcon({
+                            className: 'pin-marker-container',
+                            html: `<div class="pin-marker-wrapper">
+                                      <div class="pin-label">${data.label}${data.pinTime ? ' @ ' + data.pinTime : ''}</div>
+                                      <svg xmlns="http://www.w3.org/2000/svg" width="32" height="40" viewBox="0 0 32 40" class="pin-icon" style="display: block;">
+                                        <path fill="#e74c3c" stroke="#c0392b" stroke-width="2" d="M16 0C9.4 0 4 5.4 4 12c0 8 12 28 12 28s12-20 12-28c0-6.6-5.4-12-12-12z"/>
+                                        <circle cx="16" cy="12" r="6" fill="white"/>
+                                      </svg>
+                                   </div>`,
+                            iconSize: [80, 70],
+                            iconAnchor: [40, 65],
+                            popupAnchor: [0, -70]
                         });
                         
                         const marker = L.marker([data.lat, data.lon], { icon: pinIcon })
@@ -335,8 +342,10 @@ function App() {
                         
                         marker.bindPopup(`
                             <strong>${data.label}</strong><br>
+                            Time: ${data.pinTime || 'N/A'}<br>
                             By: ${data.createdBy}<br>
-                            <small>${new Date(data.createdAt).toLocaleString()}</small><br>
+                            Created: ${new Date(data.createdAt).toLocaleString()}<br>
+                            Expires: ${new Date(data.expiresAt).toLocaleString()}<br>
                             <button onclick="if(confirm('Delete this pin?')) { firebase.database().ref('groups/${currentGroup}/pins/${pinId}').remove(); }" style="margin-top:8px;padding:4px 8px;background:#e74c3c;color:white;border:none;border-radius:4px;cursor:pointer;">Delete Pin</button>
                         `);
                         
@@ -357,6 +366,34 @@ function App() {
         }
     }, [currentGroup, user]);
 
+    // Periodic check for expired pins
+    useEffect(() => {
+        if (!currentGroup) return;
+
+        const checkExpiredPins = () => {
+            const now = Date.now();
+            Object.entries(groupPins).forEach(([pinId, data]) => {
+                if (data.expiresAt && now > data.expiresAt) {
+                    database.ref(`groups/${currentGroup}/pins/${pinId}`).remove().catch(e => 
+                        console.log('Pin already deleted or error removing:', e)
+                    );
+                }
+            });
+        };
+
+        // Check every 30 seconds for expired pins
+        const interval = setInterval(checkExpiredPins, 30000);
+        return () => clearInterval(interval);
+    }, [currentGroup, groupPins]);
+
+    // Start location tracking when group is joined
+    useEffect(() => {
+        if (currentGroup && user && !watchId) {
+            console.log('Group joined, starting location tracking for group:', currentGroup);
+            startLocationTracking();
+        }
+    }, [currentGroup, user, watchId]);
+
     // Start location tracking
     const startLocationTracking = () => {
         console.log('Starting location tracking...');
@@ -374,60 +411,26 @@ function App() {
             (position) => {
                 const { latitude, longitude, accuracy } = position.coords;
                 
-                // Infer location source based on accuracy value
-                let source = 'unknown';
-                if (typeof accuracy === 'number') {
-                    if (accuracy < 30) {
-                        source = 'GPS'; // High precision
-                    } else if (accuracy < 100) {
-                        source = 'WiFi/BLE'; // Medium precision (WiFi or Bluetooth)
-                    } else if (accuracy < 500) {
-                        source = 'WiFi'; // Lower WiFi precision
-                    } else {
-                        source = 'IP-based'; // Very coarse, likely IP geolocation
-                    }
-                }
-                
-                console.log(`Location update: [${latitude.toFixed(5)}, ${longitude.toFixed(5)}] accuracy=${accuracy}m source=${source}`);
-
-                // Prefer GPS-level accuracy (< MAX_ACCEPTABLE_ACCURACY_METERS), but
-                // allow the first/only location to be saved even if coarser. This
-                // prevents devices that only report a coarse fix from never sharing
-                // any location. Subsequent imprecise updates will be ignored so
-                // the most recent good GPS fix remains authoritative.
+                // Only accept high-precision GPS fixes. Ignore any update that
+                // does not meet the GPS accuracy threshold. This prevents coarse
+                // WiFi/IP fixes from overwriting a true GPS location and also
+                // avoids saving coarse locations at all.
                 const isGpsQuality = (typeof accuracy === 'number' && accuracy < MAX_ACCEPTABLE_ACCURACY_METERS);
-                const hasPreviousLocation = !!(groupMembers && user && groupMembers[user.uid] && groupMembers[user.uid].lat && groupMembers[user.uid].lon);
-
-                if (!isGpsQuality && hasPreviousLocation) {
-                    // We already have a GPS-quality location for this user; ignore
-                    // new coarse updates to avoid jitter from WiFi/IP location.
-                    console.warn(`⚠️  Ignoring coarse location (source=${source}, accuracy=${accuracy}m). Keeping existing GPS location.`);
+                if (!isGpsQuality) {
+                    console.warn(`Ignoring non-GPS-quality location update (accuracy=${accuracy}m). Waiting for a precise GPS fix.`);
                     return;
                 }
 
                 const uid = getUid();
                 if (uid && currentGroup) {
-                    // Update local debug state so phone users can see what the
-                    // app is receiving from the browser/device.
-                    try {
-                        setLastPosition({ lat: latitude, lon: longitude });
-                        setLastAccuracy(accuracy);
-                        setLastSource(source);
-                        setLastLocationTimestamp(Date.now());
-                    } catch (e) {
-                        // ignore during unmounted state
-                    }
-
                     database.ref(`groups/${currentGroup}/locations/${uid}`).set({
                         name: username,
                         sport: sport,
                         lat: latitude,
                         lon: longitude,
-                        accuracy: accuracy,
-                        source: source,
                         timestamp: Date.now()
                     }).then(() => {
-                        console.log(`✅ Location saved to Firebase (source=${source})`);
+                        console.log(`✅ Location saved to Firebase`);
                     }).catch((err) => {
                         console.error('❌ Error saving to Firebase:', err);
                     });
@@ -762,15 +765,6 @@ function App() {
                 <div className="header-info">
                     <h2>{currentGroupName ? `${currentGroupName} (${currentGroup})` : `Group: ${currentGroup}`}</h2>
                     <span className="user-badge">{username} ({sport})</span>
-                    <div className="location-status" style={{ fontSize: 12, marginTop: 6, color: '#d4cbc0' }}>
-                        {lastPosition ? (
-                            <span>
-                                Location: {lastPosition.lat.toFixed(5)}, {lastPosition.lon.toFixed(5)} • ±{lastAccuracy ? Math.round(lastAccuracy) + 'm' : '—'} • {lastSource || '—'}
-                            </span>
-                        ) : (
-                            <span>Location: no fix yet</span>
-                        )}
-                    </div>
                 </div>
                 <div style={{ display: 'flex', gap: 8 }}>
                     <button 
@@ -901,6 +895,88 @@ function App() {
                 </div>
             )}
             
+            {showPinModal && (
+                <div style={{
+                    position: 'fixed',
+                    inset: 0,
+                    background: 'rgba(0,0,0,0.5)',
+                    display: 'flex',
+                    alignItems: 'center',
+                    justifyContent: 'center',
+                    zIndex: 10000
+                }}>
+                    <div style={{
+                        background: '#d4cbc0',
+                        borderRadius: 12,
+                        padding: 20,
+                        width: '90%',
+                        maxWidth: 400,
+                        boxShadow: '0 10px 30px rgba(0,0,0,0.2)',
+                        border: '4px solid #2d1b3d'
+                    }}>
+                        <h3 style={{ marginBottom: 16, color: '#2d1b3d' }}>📍 Name Your Pin</h3>
+                        <div className="form-group">
+                            <input
+                                type="text"
+                                placeholder="Enter pin name"
+                                value={pinLabel}
+                                onChange={(e) => setPinLabel(e.target.value)}
+                                className="input"
+                                autoFocus
+                                maxLength="32"
+                            />
+                        </div>
+                        <div className="form-group">
+                            <label>Time:</label>
+                            <input
+                                type="time"
+                                value={pinTime}
+                                onChange={(e) => setPinTime(e.target.value)}
+                                className="input"
+                            />
+                        </div>
+                        <div className="form-group">
+                            <button
+                                className="btn btn-secondary"
+                                onClick={() => {
+                                    setShowPinModal(false);
+                                    setPinLabel('');
+                                }}
+                                style={{ width: 'auto', marginBottom: 0 }}
+                            >
+                                Cancel
+                            </button>
+                            <button
+                                className="btn btn-primary"
+                                onClick={() => {
+                                    if (pinLabel.trim()) {
+                                        const pinId = Date.now().toString();
+                                        const now = Date.now();
+                                        const fiveMinutes = 5 * 60 * 1000; // 5 minutes in milliseconds
+                                        database.ref(`groups/${currentGroup}/pins/${pinId}`).set({
+                                            lat: pendingPinLocation.lat,
+                                            lon: pendingPinLocation.lng,
+                                            label: pinLabel.trim(),
+                                            pinTime: pinTime,
+                                            createdBy: username,
+                                            createdAt: now,
+                                            expiresAt: now + fiveMinutes
+                                        });
+                                        setShowPinModal(false);
+                                        setPinLabel('');
+                                        setPinTime('');
+                                        setPinMode(false);
+                                    }
+                                }}
+                                style={{ width: 'auto', marginBottom: 0 }}
+                            >
+                                Add Pin
+                            </button>
+                        </div>
+                    </div>
+                </div>
+            )}
+            
             <div className="members-panel">
                 <h3>Group Members ({Object.keys(groupMembers).length})</h3>
                 <div className="members-list">
@@ -929,11 +1005,7 @@ function App() {
                                         ? `Updated ${Math.round((Date.now() - data.timestamp) / 1000)}s ago`
                                         : 'No location yet'}
                                 </small>
-                                {data.source && (
-                                    <small style={{ fontSize: '0.75rem', color: '#666' }}>
-                                        {data.source} {data.accuracy && `(±${Math.round(data.accuracy)}m)`}
-                                    </small>
-                                )}
+
                             </div>
                         </div>
                     ))}
