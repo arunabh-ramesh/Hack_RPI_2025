@@ -291,8 +291,8 @@ function App() {
         if (user && currentGroup) {
             await database.ref(`groups/${currentGroup}/locations/${user.uid}`).remove();
             await database.ref(`groups/${currentGroup}/members/${user.uid}`).remove();
-            // After leaving, attempt cleanup
-            cleanupGroupIfEmpty(currentGroup);
+            // After leaving, attempt cleanup after a short delay to avoid race conditions
+            setTimeout(() => cleanupGroupIfEmpty(currentGroup), 1000);
         }
         
         setCurrentGroup(null);
