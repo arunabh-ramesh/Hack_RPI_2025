@@ -112,42 +112,45 @@ function App() {
 
     // Start location tracking
     const startLocationTracking = () => {
-        if (!navigator.geolocation) {
-            alert('Geolocation is not supported by your browser');
-            return;
-        }
+        console.log('Starting location tracking...');
+        console.log('User:', user?.uid, 'Group:', currentGroup, 'Username:', username);
+        
+        // Use simulated location for demo (works without GPS)
+        const updateSimulatedLocation = () => {
+            const simulatedLat = 39.1911 + (Math.random() - 0.5) * 0.01;
+            const simulatedLon = -106.8175 + (Math.random() - 0.5) * 0.01;
+            
+            console.log('Updating simulated location:', simulatedLat, simulatedLon);
+            
+            if (user && currentGroup) {
+                database.ref(`groups/${currentGroup}/locations/${user.uid}`).set({
+                    name: username,
+                    sport: sport,
+                    lat: simulatedLat,
+                    lon: simulatedLon,
+                    timestamp: Date.now()
+                }).then(() => {
+                    console.log('✅ Location saved to Firebase successfully!');
+                }).catch((err) => {
+                    console.error('❌ Error saving to Firebase:', err);
+                });
 
-        const id = navigator.geolocation.watchPosition(
-            (position) => {
-                const { latitude, longitude } = position.coords;
-                
-                // Update Firebase with current location
-                if (user && currentGroup) {
-                    database.ref(`groups/${currentGroup}/locations/${user.uid}`).set({
-                        name: username,
-                        sport: sport,
-                        lat: latitude,
-                        lon: longitude,
-                        timestamp: Date.now()
-                    });
-
-                    // Center map on user location
-                    if (mapInstanceRef.current) {
-                        mapInstanceRef.current.setView([latitude, longitude], 15);
-                    }
+                if (mapInstanceRef.current) {
+                    mapInstanceRef.current.setView([simulatedLat, simulatedLon], 15);
                 }
-            },
-            (error) => {
-                console.error('Error getting location:', error);
-            },
-            {
-                enableHighAccuracy: true,
-                maximumAge: 0,
-                timeout: 5000
+            } else {
+                console.error('Missing user or group!', { user: user?.uid, currentGroup });
             }
-        );
-
-        setWatchId(id);
+        };
+        
+        // Initial update
+        updateSimulatedLocation();
+        
+        // Update every 5 seconds
+        const simulationInterval = setInterval(updateSimulatedLocation, 5000);
+        setWatchId(simulationInterval);
+        
+        console.log('✅ Simulated location tracking started!');
     };
 
     // Stop location tracking
