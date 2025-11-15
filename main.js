@@ -27,9 +27,67 @@ function App() {
     const [sport, setSport] = useState('ski');
     const [groupMembers, setGroupMembers] = useState({});
     const [watchId, setWatchId] = useState(null);
+    const [groupName, setGroupName] = useState(''); // name to create
+    const [currentGroupName, setCurrentGroupName] = useState(null); // name after join/create
     const mapRef = useRef(null);
     const mapInstanceRef = useRef(null);
     const markersRef = useRef({});
+
+    // Centralized map initialization to avoid race conditions
+    const initMapIfNeeded = () => {
+        if (!currentGroup) return;
+        if (!mapRef.current) return; // DOM not attached yet
+        if (mapInstanceRef.current) return; // Already initialized
+        try {
+            console.log('[Map] Initializing map for group', currentGroup);
+            const map = L.map(mapRef.current).setView([39.1911, -106.8175], 13);
+            L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+                attribution: '© OpenStreetMap contributors',
+                maxZoom: 18
+            }).addTo(map);
+            mapInstanceRef.current = map;
+            // Multiple delayed invalidations to handle flex layout settling
+            [50, 250, 1000].forEach(delay => {
+                setTimeout(() => {
+                    if (mapInstanceRef.current) {
+                        mapInstanceRef.current.invalidateSize();
+                        console.log('[Map] invalidateSize at', delay, 'ms');
+                    }
+                }, delay);
+            });
+        } catch (e) {
+            console.error('[Map] Initialization failed:', e);
+        }
+    };
+
+    // Remove entire group if no members remain
+    const cleanupGroupIfEmpty = async (code) => {
+        if (!code) return;
+        try {
+            const membersSnap = await database.ref(`groups/${code}/members`).once('value');
+            if (!membersSnap.exists()) {
+                console.log('[Cleanup] Removing empty group', code);
+                await database.ref(`groups/${code}`).remove();
+            }
+        } catch (e) {
+            console.warn('[Cleanup] Failed to check/remove group', code, e);
+        }
+    };
+
+    // Generate a unique group code
+    const generateGroupCode = async (length = 6, attempts = 10) => {
+        const chars = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789';
+        for (let i = 0; i < attempts; i++) {
+            let code = '';
+            for (let j = 0; j < length; j++) {
+                code += chars[Math.floor(Math.random() * chars.length)];
+            }
+            // Check if group already exists
+            const snap = await database.ref(`groups/${code}`).once('value');
+            if (!snap.exists()) return code;
+        }
+        throw new Error('Failed to generate unique group code. Please try again.');
+    };
 
     // Authentication state listener
     useEffect(() => {
@@ -39,31 +97,48 @@ function App() {
         return () => unsubscribe();
     }, []);
 
-    // Initialize map when we have a group
+    // Always start at username entry: sign out any persisted anonymous session
     useEffect(() => {
-        if (currentGroup && mapRef.current && !mapInstanceRef.current) {
-            console.log('Initializing map...');
-            try {
-                // Default to a ski resort location (Aspen, CO as example)
-                const map = L.map(mapRef.current).setView([39.1911, -106.8175], 13);
-                
-                L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
-                    attribution: '© OpenStreetMap contributors',
-                    maxZoom: 18
-                }).addTo(map);
-                
-                mapInstanceRef.current = map;
-                console.log('Map initialized successfully');
-                
-                // Force map to resize after a short delay
-                setTimeout(() => {
-                    map.invalidateSize();
-                }, 100);
-            } catch (error) {
-                console.error('Error initializing map:', error);
-            }
+        // If there is a pre-existing session (e.g. page reload), sign out to force username screen
+        if (auth.currentUser) {
+            auth.signOut().catch(e => console.warn('Initial signOut failed', e));
+            setUser(null);
+            setUsername('');
         }
+    }, []);
+
+    // Initialize map when group changes
+    useEffect(() => {
+        initMapIfNeeded();
     }, [currentGroup]);
+
+    // Invalidate size on window resize
+    useEffect(() => {
+        const handleResize = () => {
+            if (mapInstanceRef.current) {
+                mapInstanceRef.current.invalidateSize();
+                console.log('[Map] invalidateSize on resize');
+            }
+        };
+        window.addEventListener('resize', handleResize);
+        return () => window.removeEventListener('resize', handleResize);
+    }, []);
+
+    // Fallback cleanup on browser/tab close
+    useEffect(() => {
+        if (!currentGroup || !user) return;
+        const handleBeforeUnload = () => {
+            try {
+                // Attempt immediate removals; onDisconnect already queued
+                database.ref(`groups/${currentGroup}/locations/${user.uid}`).remove();
+                database.ref(`groups/${currentGroup}/members/${user.uid}`).remove();
+            } catch (e) {
+                console.warn('[Unload] Failed immediate removal', e);
+            }
+        };
+        window.addEventListener('beforeunload', handleBeforeUnload);
+        return () => window.removeEventListener('beforeunload', handleBeforeUnload);
+    }, [currentGroup, user]);
 
     // Listen to group location updates
     useEffect(() => {
@@ -185,6 +260,17 @@ function App() {
 
         const code = groupCode.toUpperCase();
         setCurrentGroup(code);
+        // Fetch meta name if exists
+        try {
+            const metaSnap = await database.ref(`groups/${code}/meta/name`).once('value');
+            if (metaSnap.exists()) {
+                setCurrentGroupName(metaSnap.val());
+            } else {
+                setCurrentGroupName(null);
+            }
+        } catch (e) {
+            console.warn('Could not load group name:', e);
+        }
         
         // Add user to group members
         await database.ref(`groups/${code}/members/${user.uid}`).set({
@@ -192,6 +278,10 @@ function App() {
             sport: sport,
             joinedAt: Date.now()
         });
+
+        // Presence cleanup on disconnect
+        database.ref(`groups/${code}/members/${user.uid}`).onDisconnect().remove();
+        database.ref(`groups/${code}/locations/${user.uid}`).onDisconnect().remove();
 
         // Start tracking location
         startLocationTracking();
@@ -204,10 +294,13 @@ function App() {
         if (user && currentGroup) {
             await database.ref(`groups/${currentGroup}/locations/${user.uid}`).remove();
             await database.ref(`groups/${currentGroup}/members/${user.uid}`).remove();
+            // After leaving, attempt cleanup
+            cleanupGroupIfEmpty(currentGroup);
         }
         
         setCurrentGroup(null);
         setGroupCode('');
+        setCurrentGroupName(null);
     };
 
     // Sign out
@@ -217,8 +310,63 @@ function App() {
         setUsername('');
     };
 
-    // Render login screen
-    if (!user) {
+    // Create new group with generated code
+    const handleCreateGroup = async () => {
+        if (!username.trim()) {
+            alert('Enter your name first');
+            return;
+        }
+        try {
+            let codeInput = groupCode.trim().toUpperCase();
+            const codePattern = /^[A-Z0-9]{4,8}$/; // allow 4-8 chars alphanumeric
+            let finalCode;
+            if (codeInput) {
+                if (!codePattern.test(codeInput)) {
+                    alert('Custom code must be 4-8 letters/numbers (A-Z, 0-9).');
+                    return;
+                }
+                // Check uniqueness
+                const exists = (await database.ref(`groups/${codeInput}`).once('value')).exists();
+                if (exists) {
+                    alert('That group code is already taken. Choose another or leave blank to auto-generate.');
+                    return;
+                }
+                finalCode = codeInput;
+            } else {
+                finalCode = await generateGroupCode(6);
+            }
+            console.log('[CreateGroup] Final code selected:', finalCode);
+            setGroupCode(finalCode);
+            setCurrentGroup(finalCode); // triggers map view render
+            const resolvedName = groupName.trim() ? groupName.trim() : finalCode;
+            setCurrentGroupName(resolvedName);
+            // Write meta name
+            await database.ref(`groups/${finalCode}/meta`).set({
+                name: resolvedName,
+                createdAt: Date.now(),
+                createdBy: user.uid
+            });
+            // Add user member
+            await database.ref(`groups/${finalCode}/members/${user.uid}`).set({
+                name: username,
+                sport: sport,
+                joinedAt: Date.now(),
+                owner: true
+            });
+            // Presence cleanup on disconnect
+            database.ref(`groups/${finalCode}/members/${user.uid}`).onDisconnect().remove();
+            database.ref(`groups/${finalCode}/locations/${user.uid}`).onDisconnect().remove();
+            // Kick map init after state commits
+            requestAnimationFrame(() => initMapIfNeeded());
+            startLocationTracking();
+        } catch (err) {
+            console.error(err);
+            alert(err.message);
+        }
+    };
+
+    // Render username/login screen (force if username not set)
+    if (!user || !username) {
         return (
             <div className="container">
                 <div className="auth-container">
@@ -248,7 +396,7 @@ function App() {
                     </div>
                     
                     <button onClick={handleSignIn} className="btn btn-primary">
-                        Get Started
+                        {user ? 'Continue' : 'Get Started'}
                     </button>
                 </div>
             </div>
@@ -270,12 +418,28 @@ function App() {
                             value={groupCode}
                             onChange={(e) => setGroupCode(e.target.value.toUpperCase())}
                             className="input"
-                            maxLength="6"
+                            maxLength="8"
                         />
+                        <small className="hint">Enter a custom code or leave blank to auto-generate.</small>
+                    </div>
+
+                    <div className="form-group">
+                        <input
+                            type="text"
+                            placeholder="Group Name (optional)"
+                            value={groupName}
+                            onChange={(e) => setGroupName(e.target.value)}
+                            className="input"
+                            maxLength="24"
+                        />
+                        <small className="hint">Shown to members. Defaults to code.</small>
                     </div>
                     
                     <button onClick={handleJoinGroup} className="btn btn-primary">
                         Join Group
+                    </button>
+                    <button onClick={handleCreateGroup} className="btn btn-secondary">
+                        Create Group
                     </button>
                     
                     <button onClick={handleSignOut} className="btn btn-secondary">
@@ -291,7 +455,7 @@ function App() {
         <div className="app-container">
             <div className="header">
                 <div className="header-info">
-                    <h2>Group: {currentGroup}</h2>
+                    <h2>{currentGroupName ? `${currentGroupName} (${currentGroup})` : `Group: ${currentGroup}`}</h2>
                     <span className="user-badge">{username} ({sport})</span>
                 </div>
                 <button onClick={handleLeaveGroup} className="btn btn-small">
