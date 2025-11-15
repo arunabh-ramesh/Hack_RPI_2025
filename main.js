@@ -78,10 +78,10 @@ function App() {
     const generateGroupCode = async (length = 6, attempts = 10) => {
         const chars = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789';
         for (let i = 0; i < attempts; i++) {
-            let code = '';
-            for (let j = 0; j < length; j++) {
-                code += chars[Math.floor(Math.random() * chars.length)];
-            }
+            const code = Array.from({ length }, () => chars[Math.floor(Math.random() * chars.length)]).join('');
+            
+            
+            
             // Check if group already exists
             const snap = await database.ref(`groups/${code}`).once('value');
             if (!snap.exists()) return code;
