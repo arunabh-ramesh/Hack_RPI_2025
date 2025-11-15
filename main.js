@@ -26,7 +26,8 @@ function App() {
     const [username, setUsername] = useState('');
     const [sport, setSport] = useState('ski');
     const [groupMembers, setGroupMembers] = useState({});
-    const [watchId, setWatchId] = useState(null);
+    const [watchId, setWatchId] = useState(null); // geolocation watch id (if used)
+    const [simIntervalId, setSimIntervalId] = useState(null); // simulation interval id
     const [groupName, setGroupName] = useState(''); // name to create
     const [currentGroupName, setCurrentGroupName] = useState(null); // name after join/create
     const mapRef = useRef(null);
@@ -218,20 +219,36 @@ function App() {
             }
         };
         
+        // Clear any existing simulation interval before starting a new one
+        if (simIntervalId) {
+            clearInterval(simIntervalId);
+            setSimIntervalId(null);
+        }
+
         // Initial update
         updateSimulatedLocation();
         
         // Update every 5 seconds
         const simulationInterval = setInterval(updateSimulatedLocation, 5000);
-        setWatchId(simulationInterval);
+        setSimIntervalId(simulationInterval);
         
         console.log('✅ Simulated location tracking started!');
     };
 
     // Stop location tracking
     const stopLocationTracking = () => {
+        // Stop simulated interval if active
+        if (simIntervalId) {
+            clearInterval(simIntervalId);
+            setSimIntervalId(null);
+        }
+        // Stop geolocation watcher if active (legacy path)
         if (watchId) {
-            navigator.geolocation.clearWatch(watchId);
+            try {
+                navigator.geolocation.clearWatch(watchId);
+            } catch (e) {
+                // ignore if not a geolocation id
+            }
             setWatchId(null);
         }
     };
