@@ -30,6 +30,12 @@ function App() {
     const [watchId, setWatchId] = useState(null); // geolocation watch id (if used)
     const [simIntervalId, setSimIntervalId] = useState(null); // simulation interval id
     const [groupName, setGroupName] = useState(''); // name to create
+    const [signingIn, setSigningIn] = useState(false); // prevent duplicate sign-in attempts
+    // Maximum acceptable accuracy (in meters). Only GPS-level precision (< 30m) is accepted.
+    // WiFi, BLE, and IP-based locations will be rejected to ensure only high-precision
+    // GPS locations are stored. This keeps the most recent GPS location unchanged
+    // when coarser sources are attempted.
+    const MAX_ACCEPTABLE_ACCURACY_METERS = 30; // GPS-only threshold
     const [currentGroupName, setCurrentGroupName] = useState(null); // name after join/create
     const [showLocationPrompt, setShowLocationPrompt] = useState(false);
     const [locationError, setLocationError] = useState('');
@@ -51,7 +57,7 @@ function App() {
         if (mapInstanceRef.current) return; // Already initialized
         try {
             console.log('[Map] Initializing map for group', currentGroup);
-            const map = L.map(mapRef.current).setView([39.1911, -106.8175], 13);
+            const map = L.map(mapRef.current).setView([42.7285, -73.6852], 13);
             L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
                 attribution: '© OpenStreetMap contributors',
                 maxZoom: 18
@@ -222,12 +228,17 @@ function App() {
                 // Add new markers
                 Object.entries(locations).forEach(([userId, data]) => {
                     if (data.lat && data.lon) {
+                        // Generate a unique color for each user based on their ID
+                        const hue = (parseInt(userId.charCodeAt(0)) * 137.5) % 360; // Use golden angle for color distribution
+                        const userColor = `hsl(${hue}, 70%, 50%)`;
                         const icon = L.divIcon({
                             className: 'custom-marker',
-                            html: `<div class="marker-${data.sport}">
+                            html: `<div class="marker-user" style="--marker-color: ${userColor}">
                                       <div class="marker-label">${data.name}</div>
                                    </div>`,
-                            iconSize: [40, 40]
+                            iconSize: [44, 56],
+                            iconAnchor: [22, 56],
+                            popupAnchor: [0, -56]
                         });
                         
                         const marker = L.marker([data.lat, data.lon], { icon })
@@ -321,18 +332,42 @@ function App() {
         // Try to get real location first
         const id = navigator.geolocation.watchPosition(
             (position) => {
-                const { latitude, longitude } = position.coords;
-                console.log('Real location updated:', latitude, longitude);
+                const { latitude, longitude, accuracy } = position.coords;
                 
+                // Infer location source based on accuracy value
+                let source = 'unknown';
+                if (typeof accuracy === 'number') {
+                    if (accuracy < 30) {
+                        source = 'GPS'; // High precision
+                    } else if (accuracy < 100) {
+                        source = 'WiFi/BLE'; // Medium precision (WiFi or Bluetooth)
+                    } else if (accuracy < 500) {
+                        source = 'WiFi'; // Lower WiFi precision
+                    } else {
+                        source = 'IP-based'; // Very coarse, likely IP geolocation
+                    }
+                }
+                
+                console.log(`Location update: [${latitude.toFixed(5)}, ${longitude.toFixed(5)}] accuracy=${accuracy}m source=${source}`);
+
+                // Only accept GPS-level accuracy (< 30m). All other sources
+                // (WiFi, BLE, IP-based) are rejected.
+                if (typeof accuracy !== 'number' || accuracy >= MAX_ACCEPTABLE_ACCURACY_METERS) {
+                    console.warn(`⚠️  Rejecting non-GPS location (source=${source}, accuracy=${accuracy}m). Keeping most recent GPS location.`);
+                    return;
+                }
+
                 if (user && currentGroup) {
                     database.ref(`groups/${currentGroup}/locations/${user.uid}`).set({
                         name: username,
                         sport: sport,
                         lat: latitude,
                         lon: longitude,
+                        accuracy: accuracy,
+                        source: source,
                         timestamp: Date.now()
                     }).then(() => {
-                        console.log('✅ Real location saved to Firebase!');
+                        console.log(`✅ Location saved to Firebase (source=${source})`);
                     }).catch((err) => {
                         console.error('❌ Error saving to Firebase:', err);
                     });
@@ -429,11 +464,18 @@ function App() {
             return;
         }
         
+        if (signingIn) return; // Prevent duplicate sign-in attempts
+        setSigningIn(true);
+        
         try {
-            await auth.signInAnonymously();
+            // Only sign in if not already signed in
+            if (!auth.currentUser) {
+                await auth.signInAnonymously();
+            }
         } catch (error) {
             console.error('Error signing in:', error);
             alert('Error signing in: ' + error.message);
+            setSigningIn(false);
         }
     };
 
@@ -547,19 +589,8 @@ function App() {
         }
     };
 
-    // Render username/login screen (only proceed after explicit sign-in)
-    if (authInitializing) {
-        return (
-            <div className="container">
-                <div className="auth-container">
-                    <h1>🏔️ Group Tracker</h1>
-                    <p className="subtitle">Loading...</p>
-                </div>
-            </div>
-        );
-    }
-
-    if (!user) {
+    // Render username/login screen (force if username not set)
+    if (!username.trim()) {
         return (
             <div className="container">
                 <div className="auth-container">
@@ -808,6 +839,11 @@ function App() {
                                         ? `Updated ${Math.round((Date.now() - data.timestamp) / 1000)}s ago`
                                         : 'No location yet'}
                                 </small>
+                                {data.source && (
+                                    <small style={{ fontSize: '0.75rem', color: '#666' }}>
+                                        {data.source} {data.accuracy && `(±${Math.round(data.accuracy)}m)`}
+                                    </small>
+                                )}
                             </div>
                         </div>
                     ))}
