@@ -56,6 +56,37 @@ function App() {
     const [lastSource, setLastSource] = useState(null);
     const [lastLocationTimestamp, setLastLocationTimestamp] = useState(null);
 
+    // Helper to get a stable uid (may come from auth.currentUser during async sign-in)
+    const getUid = () => {
+        return (user && user.uid) || (auth.currentUser && auth.currentUser.uid) || null;
+    };
+
+    // Ensure there's an anonymous signed-in user; returns the user object or null
+    const ensureSignedIn = async () => {
+        if (getUid()) return auth.currentUser || user;
+        if (signingIn) return null;
+        setSigningIn(true);
+        try {
+            if (!auth.currentUser) {
+                await auth.signInAnonymously();
+            }
+            // Wait briefly for onAuthStateChanged to fire and set `user`
+            await new Promise((resolve) => {
+                const unsub = auth.onAuthStateChanged((u) => {
+                    unsub();
+                    resolve(u || auth.currentUser);
+                });
+                setTimeout(() => resolve(auth.currentUser), 1000);
+            });
+            return auth.currentUser;
+        } catch (e) {
+            console.error('ensureSignedIn failed', e);
+            return null;
+        } finally {
+            setSigningIn(false);
+        }
+    };
+
     // Centralized map initialization to avoid race conditions
     const initMapIfNeeded = () => {
         if (!currentGroup) return;
@@ -205,8 +236,11 @@ function App() {
         const handleBeforeUnload = () => {
             try {
                 // Attempt immediate removals; onDisconnect already queued
-                database.ref(`groups/${currentGroup}/locations/${user.uid}`).remove();
-                database.ref(`groups/${currentGroup}/members/${user.uid}`).remove();
+                const uid = getUid();
+                if (uid) {
+                    database.ref(`groups/${currentGroup}/locations/${uid}`).remove();
+                    database.ref(`groups/${currentGroup}/members/${uid}`).remove();
+                }
             } catch (e) {
                 console.warn('[Unload] Failed immediate removal', e);
             }
@@ -371,7 +405,8 @@ function App() {
                     return;
                 }
 
-                if (user && currentGroup) {
+                const uid = getUid();
+                if (uid && currentGroup) {
                     // Update local debug state so phone users can see what the
                     // app is receiving from the browser/device.
                     try {
@@ -383,7 +418,7 @@ function App() {
                         // ignore during unmounted state
                     }
 
-                    database.ref(`groups/${currentGroup}/locations/${user.uid}`).set({
+                    database.ref(`groups/${currentGroup}/locations/${uid}`).set({
                         name: username,
                         sport: sport,
                         lat: latitude,
@@ -429,8 +464,9 @@ function App() {
             
             console.log('Updating simulated location:', simulatedLat, simulatedLon);
             
-            if (user && currentGroup) {
-                database.ref(`groups/${currentGroup}/locations/${user.uid}`).set({
+            const uid = getUid();
+            if (uid && currentGroup) {
+                database.ref(`groups/${currentGroup}/locations/${uid}`).set({
                     name: username,
                     sport: sport,
                     lat: simulatedLat,
@@ -510,6 +546,13 @@ function App() {
             alert('Please enter a group code');
             return;
         }
+        // Ensure we have an authenticated user
+        const signed = await ensureSignedIn();
+        if (!signed || !signed.uid) {
+            alert('Unable to sign in. Please try again.');
+            return;
+        }
+        const uid = signed.uid;
 
         const code = groupCode.toUpperCase();
         setCurrentGroup(code);
@@ -526,26 +569,31 @@ function App() {
         }
         
         // Add user to group members
-        await database.ref(`groups/${code}/members/${user.uid}`).set({
+        await database.ref(`groups/${code}/members/${uid}`).set({
             name: username,
             sport: sport,
             joinedAt: Date.now()
         });
 
         // Presence cleanup on disconnect
-        database.ref(`groups/${code}/members/${user.uid}`).onDisconnect().remove();
-        database.ref(`groups/${code}/locations/${user.uid}`).onDisconnect().remove();
+        database.ref(`groups/${code}/members/${uid}`).onDisconnect().remove();
+        database.ref(`groups/${code}/locations/${uid}`).onDisconnect().remove();
     };
 
     // Leave group
     const handleLeaveGroup = async () => {
         stopLocationTracking();
         
-        if (user && currentGroup) {
-            await database.ref(`groups/${currentGroup}/locations/${user.uid}`).remove();
-            await database.ref(`groups/${currentGroup}/members/${user.uid}`).remove();
-            // After leaving, attempt cleanup
-            cleanupGroupIfEmpty(currentGroup);
+        const uid = getUid();
+        if (uid && currentGroup) {
+            try {
+                await database.ref(`groups/${currentGroup}/locations/${uid}`).remove();
+                await database.ref(`groups/${currentGroup}/members/${uid}`).remove();
+                // After leaving, attempt cleanup
+                cleanupGroupIfEmpty(currentGroup);
+            } catch (e) {
+                console.warn('Error removing presence on leave:', e);
+            }
         }
         
         setCurrentGroup(null);
@@ -566,6 +614,14 @@ function App() {
             alert('Enter your name first');
             return;
         }
+        // Ensure signed-in
+        const signed = await ensureSignedIn();
+        if (!signed || !signed.uid) {
+            alert('Unable to sign in. Please try again.');
+            return;
+        }
+        const uid = signed.uid;
+
         try {
             let codeInput = groupCode.trim().toUpperCase();
             const codePattern = /^[A-Z0-9]{4,8}$/; // allow 4-8 chars alphanumeric
@@ -594,18 +650,18 @@ function App() {
             await database.ref(`groups/${finalCode}/meta`).set({
                 name: resolvedName,
                 createdAt: Date.now(),
-                createdBy: user.uid
+                createdBy: uid
             });
             // Add user member
-            await database.ref(`groups/${finalCode}/members/${user.uid}`).set({
+            await database.ref(`groups/${finalCode}/members/${uid}`).set({
                 name: username,
                 sport: sport,
                 joinedAt: Date.now(),
                 owner: true
             });
             // Presence cleanup on disconnect
-            database.ref(`groups/${finalCode}/members/${user.uid}`).onDisconnect().remove();
-            database.ref(`groups/${finalCode}/locations/${user.uid}`).onDisconnect().remove();
+            database.ref(`groups/${finalCode}/members/${uid}`).onDisconnect().remove();
+            database.ref(`groups/${finalCode}/locations/${uid}`).onDisconnect().remove();
             // Kick map init after state commits (tracking starts via useEffect)
             requestAnimationFrame(() => initMapIfNeeded());
         } catch (err) {
