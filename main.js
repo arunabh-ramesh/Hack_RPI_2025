@@ -249,6 +249,29 @@ function App() {
         }
 
         const code = groupCode.toUpperCase();
+        
+        // Validate that the group exists before joining
+        try {
+            const groupSnap = await database.ref(`groups/${code}`).once('value');
+            if (!groupSnap.exists()) {
+                alert('Group code does not exist. Please check the code or create a new group.');
+                return;
+            }
+            
+            // Check if group has meta information or at least one member
+            const metaSnap = await database.ref(`groups/${code}/meta`).once('value');
+            const membersSnap = await database.ref(`groups/${code}/members`).once('value');
+            
+            if (!metaSnap.exists() && !membersSnap.exists()) {
+                alert('This group appears to be invalid. Please create a new group or use a different code.');
+                return;
+            }
+        } catch (e) {
+            console.error('Error validating group:', e);
+            alert('Error validating group. Please try again.');
+            return;
+        }
+        
         setCurrentGroup(code);
         // Fetch meta name if exists
         try {
