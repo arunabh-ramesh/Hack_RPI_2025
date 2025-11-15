@@ -44,8 +44,8 @@ function App() {
         if (currentGroup && mapRef.current && !mapInstanceRef.current) {
             console.log('Initializing map...');
             try {
-                // Default to a ski resort location (Aspen, CO as example)
-                const map = L.map(mapRef.current).setView([39.1911, -106.8175], 13);
+                // Default to Whistler, BC
+                const map = L.map(mapRef.current).setView([50.1163, -122.9574], 13);
                 
                 L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
                     attribution: '© OpenStreetMap contributors',
@@ -110,15 +110,69 @@ function App() {
         return () => locationsRef.off();
     }, [currentGroup]);
 
+    // Start location tracking when group is joined
+    useEffect(() => {
+        if (currentGroup && user && !watchId) {
+            console.log('Group joined, starting location tracking for group:', currentGroup);
+            startLocationTracking();
+        }
+    }, [currentGroup, user]);
+
     // Start location tracking
     const startLocationTracking = () => {
         console.log('Starting location tracking...');
         console.log('User:', user?.uid, 'Group:', currentGroup, 'Username:', username);
         
-        // Use simulated location for demo (works without GPS)
+        if (!navigator.geolocation) {
+            console.log('Geolocation not supported, using simulated location');
+            useSimulatedLocation();
+            return;
+        }
+
+        // Try to get real location first
+        const id = navigator.geolocation.watchPosition(
+            (position) => {
+                const { latitude, longitude } = position.coords;
+                console.log('Real location updated:', latitude, longitude);
+                
+                if (user && currentGroup) {
+                    database.ref(`groups/${currentGroup}/locations/${user.uid}`).set({
+                        name: username,
+                        sport: sport,
+                        lat: latitude,
+                        lon: longitude,
+                        timestamp: Date.now()
+                    }).then(() => {
+                        console.log('✅ Real location saved to Firebase!');
+                    }).catch((err) => {
+                        console.error('❌ Error saving to Firebase:', err);
+                    });
+
+                    if (mapInstanceRef.current) {
+                        mapInstanceRef.current.setView([latitude, longitude], 15);
+                    }
+                }
+            },
+            (error) => {
+                console.error('Error getting real location:', error);
+                console.log('Falling back to simulated location');
+                useSimulatedLocation();
+            },
+            {
+                enableHighAccuracy: true,
+                maximumAge: 10000,
+                timeout: 10000
+            }
+        );
+
+        setWatchId(id);
+    };
+
+    // Use simulated location as fallback
+    const useSimulatedLocation = () => {
         const updateSimulatedLocation = () => {
-            const simulatedLat = 39.1911 + (Math.random() - 0.5) * 0.01;
-            const simulatedLon = -106.8175 + (Math.random() - 0.5) * 0.01;
+            const simulatedLat = 50.1163 + (Math.random() - 0.5) * 0.01;
+            const simulatedLon = -122.9574 + (Math.random() - 0.5) * 0.01;
             
             console.log('Updating simulated location:', simulatedLat, simulatedLon);
             
@@ -130,7 +184,7 @@ function App() {
                     lon: simulatedLon,
                     timestamp: Date.now()
                 }).then(() => {
-                    console.log('✅ Location saved to Firebase successfully!');
+                    console.log('✅ Simulated location saved to Firebase!');
                 }).catch((err) => {
                     console.error('❌ Error saving to Firebase:', err);
                 });
@@ -138,8 +192,6 @@ function App() {
                 if (mapInstanceRef.current) {
                     mapInstanceRef.current.setView([simulatedLat, simulatedLon], 15);
                 }
-            } else {
-                console.error('Missing user or group!', { user: user?.uid, currentGroup });
             }
         };
         
@@ -184,7 +236,8 @@ function App() {
         }
 
         const code = groupCode.toUpperCase();
-        setCurrentGroup(code);
+        
+        console.log('Joining group:', code);
         
         // Add user to group members
         await database.ref(`groups/${code}/members/${user.uid}`).set({
@@ -193,8 +246,8 @@ function App() {
             joinedAt: Date.now()
         });
 
-        // Start tracking location
-        startLocationTracking();
+        // Set current group (this will trigger location tracking via useEffect)
+        setCurrentGroup(code);
     };
 
     // Leave group
@@ -307,7 +360,20 @@ function App() {
                 <h3>Group Members ({Object.keys(groupMembers).length})</h3>
                 <div className="members-list">
                     {Object.entries(groupMembers).map(([userId, data]) => (
-                        <div key={userId} className="member-item">
+                        <div 
+                            key={userId} 
+                            className="member-item"
+                            onClick={() => {
+                                if (data.lat && data.lon && mapInstanceRef.current) {
+                                    mapInstanceRef.current.setView([data.lat, data.lon], 16);
+                                    // Open the marker popup if it exists
+                                    if (markersRef.current[userId]) {
+                                        markersRef.current[userId].openPopup();
+                                    }
+                                }
+                            }}
+                            style={{ cursor: 'pointer' }}
+                        >
                             <span className={`sport-icon ${data.sport}`}>
                                 {data.sport === 'ski' ? '⛷️' : '🚴'}
                             </span>
