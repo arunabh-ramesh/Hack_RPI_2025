@@ -127,13 +127,7 @@ function App() {
     useEffect(() => {
         if (!currentGroup || !user) return;
         const handleBeforeUnload = () => {
-            try {
-                // Attempt immediate removals; onDisconnect already queued
-                database.ref(`groups/${currentGroup}/locations/${user.uid}`).remove();
-                database.ref(`groups/${currentGroup}/members/${user.uid}`).remove();
-            } catch (e) {
-                console.warn('[Unload] Failed immediate removal', e);
-            }
+            // No immediate removals; onDisconnect already queued
         };
         window.addEventListener('beforeunload', handleBeforeUnload);
         return () => window.removeEventListener('beforeunload', handleBeforeUnload);
