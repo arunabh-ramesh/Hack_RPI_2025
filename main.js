@@ -474,66 +474,44 @@ function App() {
 
     // Render username/login screen (force if username not set)
     if (!username.trim()) {
-        console.log('[Render] Username screen - username:', username, 'user:', !!user, 'signingIn:', signingIn);
         return (
             <div className="container">
                 <div className="auth-container">
                     <h1>🏔️ Group Tracker</h1>
                     <p className="subtitle">Track your friends on the mountain</p>
                     
-                    <form onSubmit={(e) => { 
-                        console.log('[Form] Submit - username:', username, 'signingIn:', signingIn);
-                        e.preventDefault();
-                        e.stopPropagation();
-                        if (username.trim() && !signingIn) {
-                            handleSignIn();
-                        }
-                    }}>
-                        <div className="form-group">
-                            <input
-                                type="text"
-                                placeholder="Your Name"
-                                value={username}
-                                onChange={(e) => {
-                                    console.log('[Input] Changed to:', e.target.value);
-                                    setUsername(e.target.value);
-                                }}
-                                onKeyPress={(e) => {
-                                    if (e.key === 'Enter') {
-                                        console.log('[Input] Enter pressed');
-                                        e.preventDefault();
-                                        e.stopPropagation();
-                                    }
-                                }}
-                                className="input"
-                                autoComplete="off"
-                            />
-                        </div>
-                        
-                        <div className="form-group">
-                            <label>Sport:</label>
-                            <select 
-                                value={sport} 
-                                onChange={(e) => setSport(e.target.value)}
-                                className="input"
-                            >
-                                <option value="ski">⛷️ Skiing</option>
-                                <option value="bike">🚴 Biking</option>
-                            </select>
-                        </div>
-                        
-                        <button type="submit" className="btn btn-primary" disabled={signingIn}>
-                            {signingIn ? 'Signing in...' : 'Get Started'}
-                        </button>
-                    </form>
+                    <div className="form-group">
+                        <input
+                            type="text"
+                            placeholder="Your Name"
+                            value={username}
+                            onChange={(e) => setUsername(e.target.value)}
+                            className="input"
+                        />
+                    </div>
+                    
+                    <div className="form-group">
+                        <label>Sport:</label>
+                        <select 
+                            value={sport} 
+                            onChange={(e) => setSport(e.target.value)}
+                            className="input"
+                        >
+                            <option value="ski">⛷️ Skiing</option>
+                            <option value="bike">🚴 Biking</option>
+                        </select>
+                    </div>
+                    
+                    <button onClick={handleSignIn} className="btn btn-primary">
+                        Get Started
+                    </button>
                 </div>
             </div>
         );
     }
 
     // Render group selection screen
-    if (username.trim() && !currentGroup) {
-        console.log('[Render] Group selection screen - username:', username, 'currentGroup:', currentGroup);
+    if (!currentGroup) {
         return (
             <div className="container">
                 <div className="auth-container">
