@@ -1,0 +1,117 @@
+# ---- General OS / Editor junk ----
+.DS_Store
+Thumbs.db
+*.swp
+*.sass-cache
+
+# ---- Logs ----
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+firebase-debug.log
+firestore-debug.log
+ui-debug.log
+
+# ---- Environment & secrets ----
+.env
+.env.*
+!.env.example
+
+# ---- Node & package managers ----
+node_modules/
+.pnp.cjs
+.pnp.loader.mjs
+.pnpm-store/
+.npm/
+.node_repl_history
+*.tgz
+.eslintcache
+.stylelintcache
+.tsbuildinfo
+.DS_Store
+
+# Yarn v2 / Berry
+.yarn/*
+!.yarn/releases
+!.yarn/plugins
+!.yarn/sdks
+!.yarn/versions
+
+# NPM/Yarn integrity files
+.npmrc.local
+
+# ---- Build / Output directories ----
+dist/
+build/
+out/
+coverage/
+.nyc_output/
+.tmp/
+.temp/
+.cache/
+.parcel-cache/
+.next/
+.turbo/
+.vite/
+.rollup.cache/
+.webpack-cache/
+.jest/
+jest-cache/
+jest-html-reporters-*/
+playwright-report/
+test-results/
+cypress/videos/
+cypress/screenshots/
+selenium-output/
+
+# ---- Tool / platform specific ----
+.vercel/
+netlify/
+.storybook-static/
+
+# ---- TypeScript ----
+*.tsbuildinfo
+
+# ---- Firebase local emulator data ----
+.firebase/
+# (Keep .firebaserc committed; remove above line if you want emulator data tracked)
+
+# ---- React Native / Expo (optional per plan) ----
+.expo/
+.expo-shared/
+
+# ---- IDE settings ----
+.vscode/
+.idea/
+.fleet/
+.history/
+*.code-workspace
+
+# ---- Misc ----
+*.orig
+*.bak
+*.tmp
+*.temp
+*.log.*
+logs/
+debug/
+
+# ---- Leaflet / map cached tiles (if ever downloaded) ----
+tiles/
+
+# ---- Additional environment variants ----
+.env.local
+.env.development.local
+.env.test.local
+.env.production.local
+.env.development
+.env.test
+.env.production
+
+# ---- Ignore generated lockfiles except the one you use ----
+# Uncomment the one you DO use
+# package-lock.json
+# yarn.lock
+# pnpm-lock.yaml
