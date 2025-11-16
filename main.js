@@ -46,19 +46,14 @@ function App() {
     const [showPinModal, setShowPinModal] = useState(false);
     const [pendingPinLocation, setPendingPinLocation] = useState(null); // { lat, lng }
     const [pinLabel, setPinLabel] = useState(''); // HH:MM format
-    const [highlightedTrails, setHighlightedTrails] = useState({}); // { trailId: { name, color, bounds, createdBy, expiresAt } }
+    const [pinTime, setPinTime] = useState(''); // HH:MM format
+    const [hasStarted, setHasStarted] = useState(false); // Track if user confirmed sign-in
     const mapInstanceRef = useRef(null);
     const markersRef = useRef({});
-    const trailHighlightLayersRef = useRef({});
-    const trailOverlayCanvasRef = useRef(null);
     const pinMarkersRef = useRef({});
     const pinModeRef = useRef(false);
     const mapClickHandlerRef = useRef(null);
     const mapRef = useRef(null);
-    const [trailMode, setTrailMode] = useState(false);
-    const [selectedTrail, setSelectedTrail] = useState(null);
-    const trailCanvasRef = useRef(null);
-    const trailModeRef = useRef(false);
 
 
 
@@ -167,16 +162,6 @@ function App() {
         return () => unsubscribe();
     }, []);
 
-    // Always start at username entry: sign out any persisted anonymous session
-    useEffect(() => {
-        // If there is a pre-existing session (e.g. page reload), sign out to force username screen
-        if (auth.currentUser) {
-            auth.signOut().catch(e => console.warn('Initial signOut failed', e));
-            setUser(null);
-            setUsername('');
-        }
-    }, []);
-
     // Initialize map when group changes
     useEffect(() => {
         initMapIfNeeded();
@@ -193,19 +178,10 @@ function App() {
             mapInstanceRef.current.off('click', mapClickHandlerRef.current);
         }
         
-        // Add new handler that works for both pin and trail modes
+        // Add new handler that works for pin mode
         const handler = (e) => {
             if (pinModeRef.current) {
                 // Pin mode
-                setPendingPinLocation({ lat: e.latlng.lat, lng: e.latlng.lng });
-                setPinLabel('');
-                const now = new Date();
-                const hours = String(now.getHours()).padStart(2, '0');
-                const minutes = String(now.getMinutes()).padStart(2, '0');
-                setPinTime(`${hours}:${minutes}`);
-                setShowPinModal(true);
-            } else if (trailModeRef.current) {
-                // Trail event mode
                 setPendingPinLocation({ lat: e.latlng.lat, lng: e.latlng.lng });
                 setPinLabel('');
                 const now = new Date();
@@ -224,7 +200,7 @@ function App() {
                 mapInstanceRef.current.off('click', mapClickHandlerRef.current);
             }
         };
-    }, [pinMode, trailMode, currentGroup, username]);
+    }, [pinMode, currentGroup, username]);
 
     // Invalidate size on window resize
     useEffect(() => {
@@ -249,11 +225,6 @@ function App() {
         else if (/chrome|crios/.test(ua)) platform = 'chrome';
         setDetectedPlatform(platform);
     }, []);
-
-    // Update trail mode ref
-    useEffect(() => {
-        trailModeRef.current = trailMode;
-    }, [trailMode]);
 
     // Fallback cleanup on browser/tab close
     useEffect(() => {
@@ -342,28 +313,14 @@ function App() {
                 }
             });
             
-            // Separate trail events from regular pins
-            const trailEvents = {};
-            const regularPins = {};
-            
-            Object.entries(pins).forEach(([pinId, data]) => {
-                if (data.type === 'trail_event') {
-                    trailEvents[pinId] = data;
-                } else {
-                    regularPins[pinId] = data;
-                }
-            });
-            
-            setHighlightedTrails(trailEvents);
-            
-            // Update pin markers on map (only for regular pins, not trail events)
+            // Update pin markers on map
             if (mapInstanceRef.current) {
                 // Clear old pin markers
                 Object.values(pinMarkersRef.current).forEach(marker => marker.remove());
                 pinMarkersRef.current = {};
                 
-                // Add new pin markers (only for non-trail-event pins)
-                Object.entries(regularPins).forEach(([pinId, data]) => {
+                // Add new pin markers
+                Object.entries(pins).forEach(([pinId, data]) => {
                     if (data.lat && data.lon) {
                         const pinIcon = L.divIcon({
                             className: 'pin-marker-container',
@@ -399,49 +356,6 @@ function App() {
 
         return () => pinsRef.off();
     }, [currentGroup, username]);
-
-    // Render trail highlights on map
-    useEffect(() => {
-        if (!mapInstanceRef.current) return;
-        
-        // Clear old trail highlights
-        Object.values(trailHighlightLayersRef.current).forEach(layer => {
-            mapInstanceRef.current.removeLayer(layer);
-        });
-        trailHighlightLayersRef.current = {};
-        
-        // Add new trail highlights
-        Object.entries(highlightedTrails).forEach(([trailId, data]) => {
-            if (data.lat && data.lon) {
-                // Create a highlighted circle around the trail event location
-                const highlightCircle = L.circleMarker([data.lat, data.lon], {
-                    radius: 25,
-                    fillColor: '#FFD700',
-                    color: '#FFA500',
-                    weight: 4,
-                    opacity: 0.8,
-                    fillOpacity: 0.3
-                }).addTo(mapInstanceRef.current);
-                
-                highlightCircle.bindPopup(`
-                    <strong>🎿 ${data.label}</strong><br>
-                    Time: ${data.pinTime || 'N/A'}<br>
-                    By: ${data.createdBy}<br>
-                    <button onclick="if(confirm('Remove this highlight?')) { firebase.database().ref('groups/${currentGroup}/pins/${trailId}').remove(); }" style="margin-top:8px;padding:4px 8px;background:#e74c3c;color:white;border:none;border-radius:4px;cursor:pointer;">Remove</button>
-                `);
-                
-                trailHighlightLayersRef.current[trailId] = highlightCircle;
-            }
-        });
-    }, [highlightedTrails, currentGroup]);
-
-    // Start location tracking when group is joined
-    useEffect(() => {
-        if (currentGroup && user && !watchId) {
-            console.log('Group joined, starting location tracking for group:', currentGroup);
-            startLocationTracking();
-        }
-    }, [currentGroup, user]);
 
     // Periodic check for expired pins
     useEffect(() => {
@@ -613,6 +527,8 @@ function App() {
             if (!auth.currentUser) {
                 await auth.signInAnonymously();
             }
+            // Only set hasStarted after successful authentication
+            setHasStarted(true);
         } catch (error) {
             console.error('Error signing in:', error);
             alert('Error signing in: ' + error.message);
@@ -683,9 +599,18 @@ function App() {
 
     // Sign out
     const handleSignOut = async () => {
+        stopLocationTracking();
         handleLeaveGroup();
         await auth.signOut();
+        
+        // Reset everything that affects login flow
         setUsername('');
+        setHasStarted(false);
+        setSigningIn(false);
+        setUser(null);
+        setCurrentGroup(null);
+        setGroupCode('');
+        setCurrentGroupName(null);
     };
 
     // Create new group with generated code
@@ -750,8 +675,8 @@ function App() {
         }
     };
 
-    // Render username/login screen (force if username not set)
-    if (!username.trim()) {
+    // Render username/login screen (force if user hasn't started)
+    if (!hasStarted) {
         return (
             <div className="container">
                 <div className="auth-container">
@@ -850,13 +775,6 @@ function App() {
                         style={{ background: pinMode ? '#e74c3c' : undefined }}
                     >
                         {pinMode ? '📍 Click Map to Place' : '📍 Add Pin'}
-                    </button>
-                    <button 
-                        onClick={() => setTrailMode(!trailMode)} 
-                        className={`btn btn-small ${trailMode ? 'btn-primary' : 'btn-secondary'}`}
-                        style={{ background: trailMode ? '#3498db' : undefined }}
-                    >
-                        {trailMode ? '🎿 Click to Create Event' : '🎿 Create Event'}
                     </button>
                     <button onClick={handleLeaveGroup} className="btn btn-small">
                         Leave
@@ -998,13 +916,11 @@ function App() {
                         boxShadow: '0 10px 30px rgba(0,0,0,0.2)',
                         border: '4px solid #2d1b3d'
                     }}>
-                        <h3 style={{ marginBottom: 16, color: '#2d1b3d' }}>
-                            {trailMode ? '🎿 Create Trail Event' : '📍 Name Your Pin'}
-                        </h3>
+                        <h3 style={{ marginBottom: 16, color: '#2d1b3d' }}>📍 Name Your Pin</h3>
                         <div className="form-group">
                             <input
                                 type="text"
-                                placeholder={trailMode ? "Trail name or event" : "Enter pin name"}
+                                placeholder="Enter pin name"
                                 value={pinLabel}
                                 onChange={(e) => setPinLabel(e.target.value)}
                                 className="input"
@@ -1027,7 +943,6 @@ function App() {
                                 onClick={() => {
                                     setShowPinModal(false);
                                     setPinLabel('');
-                                    setTrailMode(false);
                                 }}
                                 style={{ width: 'auto', marginBottom: 0 }}
                             >
@@ -1047,19 +962,17 @@ function App() {
                                             pinTime: pinTime,
                                             createdBy: username,
                                             createdAt: now,
-                                            expiresAt: now + fiveMinutes,
-                                            type: trailMode ? 'trail_event' : 'pin'
+                                            expiresAt: now + fiveMinutes
                                         });
                                         setShowPinModal(false);
                                         setPinLabel('');
                                         setPinTime('');
                                         setPinMode(false);
-                                        setTrailMode(false);
                                     }
                                 }}
                                 style={{ width: 'auto', marginBottom: 0 }}
                             >
-                                {trailMode ? 'Create Event' : 'Add Pin'}
+                                Add Pin
                             </button>
                         </div>
                     </div>
