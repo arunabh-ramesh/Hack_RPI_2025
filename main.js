@@ -31,6 +31,9 @@ function App() {
     const [simIntervalId, setSimIntervalId] = useState(null); // simulation interval id
     const [groupName, setGroupName] = useState(''); // name to create
     const [signingIn, setSigningIn] = useState(false); // prevent duplicate sign-in attempts
+    const [hasStarted, setHasStarted] = useState(false); // controls initial auth/login screen
+    // Derived validation helpers
+    const isUsernameValid = (username && username.trim().length >= 2);
     // Maximum acceptable accuracy (in meters). Only GPS-level precision (< 30m) is accepted.
     // WiFi, BLE, and IP-based locations will be rejected to ensure only high-precision
     // GPS locations are stored. This keeps the most recent GPS location unchanged
@@ -45,7 +48,7 @@ function App() {
     const [groupPins, setGroupPins] = useState({});
     const [showPinModal, setShowPinModal] = useState(false);
     const [pendingPinLocation, setPendingPinLocation] = useState(null); // { lat, lng }
-    const [pinLabel, setPinLabel] = useState('');
+    const [pinLabel, setPinLabel] = useState(''); // HH:MM format
     const [pinTime, setPinTime] = useState(''); // HH:MM format
     const [selectedTrail, setSelectedTrail] = useState(null); // Store selected trail info
     const [trailsLoading, setTrailsLoading] = useState(false);
@@ -443,31 +446,11 @@ function App() {
     useEffect(() => {
         const unsubscribe = auth.onAuthStateChanged((user) => {
             console.log('[Auth] State changed. User:', !!user, 'Username:', username);
-            // Only set user if we have a username (user clicked sign in)
-            if (user && !username.trim()) {
-                console.log('[Auth] User exists but no username - signing out');
-                auth.signOut();
-                setUser(null);
-            } else {
-                setUser(user);
-            }
+            // Don't forcibly sign out anonymous users; just update state.
+            setUser(user);
             setAuthInitializing(false);
         });
         return () => unsubscribe();
-    }, [username]);
-
-    // Always start at username entry: sign out any persisted anonymous session
-    useEffect(() => {
-        console.log('[Init] Initial mount - checking for existing session');
-        // If there is a pre-existing session (e.g. page reload), sign out to force username screen
-        if (auth.currentUser) {
-            console.log('[Init] Found existing session - signing out');
-            auth.signOut().then(() => {
-                console.log('[Init] Successfully signed out');
-                setUser(null);
-                setUsername('');
-            }).catch(e => console.warn('[Init] Sign out failed', e));
-        }
     }, []);
 
     // Initialize map when group changes
@@ -486,13 +469,12 @@ function App() {
             mapInstanceRef.current.off('click', mapClickHandlerRef.current);
         }
         
-        // Add new handler
+        // Add new handler that works for pin mode
         const handler = (e) => {
             if (pinModeRef.current) {
-                // Store the location and show modal
+                // Pin mode
                 setPendingPinLocation({ lat: e.latlng.lat, lng: e.latlng.lng });
                 setPinLabel('');
-                // Set time to current time in HH:MM format
                 const now = new Date();
                 const hours = String(now.getHours()).padStart(2, '0');
                 const minutes = String(now.getMinutes()).padStart(2, '0');
@@ -684,14 +666,6 @@ function App() {
         return () => pinsRef.off();
     }, [currentGroup, username]);
 
-    // Start location tracking when group is joined
-    useEffect(() => {
-        if (currentGroup && user && !watchId) {
-            console.log('Group joined, starting location tracking for group:', currentGroup);
-            startLocationTracking();
-        }
-    }, [currentGroup, user]);
-
     // Periodic check for expired pins
     useEffect(() => {
         if (!currentGroup) return;
@@ -880,6 +854,8 @@ function App() {
             } else {
                 console.log('[Sign In] User already authenticated');
             }
+            // Only set hasStarted after successful authentication
+            setHasStarted(true);
         } catch (error) {
             console.error('[Sign In] ❌ Error signing in:', error);
             alert('Error signing in: ' + error.message);
@@ -942,6 +918,18 @@ function App() {
                 console.warn('Error removing presence on leave:', e);
             }
         }
+
+        // Clean up map instance
+        if (mapInstanceRef.current) {
+            try {
+                mapInstanceRef.current.remove();
+            } catch (e) {
+                console.warn('Map remove failed', e);
+            }
+            mapInstanceRef.current = null;
+        }
+        markersRef.current = {};
+        pinMarkersRef.current = {};
         
         setCurrentGroup(null);
         setGroupCode('');
@@ -950,9 +938,18 @@ function App() {
 
     // Sign out
     const handleSignOut = async () => {
+        stopLocationTracking();
         handleLeaveGroup();
         await auth.signOut();
+        
+        // Reset everything that affects login flow
         setUsername('');
+        setHasStarted(false);
+        setSigningIn(false);
+        setUser(null);
+        setCurrentGroup(null);
+        setGroupCode('');
+        setCurrentGroupName(null);
     };
 
     // Toggle ski trails
@@ -1065,12 +1062,8 @@ function App() {
         }
     };
 
-    // Render username/login screen (force if username not set OR user not authenticated)
-    if (!username.trim() || !user) {
-        const isUsernameValid = username.trim().length >= 2;
-        
-        console.log('[Render] Login screen - Username:', username, 'Valid:', isUsernameValid, 'User:', !!user);
-        
+    // Render username/login screen (force if user hasn't started)
+    if (!hasStarted) {
         return (
             <div className="container">
                 <div className="auth-container">
