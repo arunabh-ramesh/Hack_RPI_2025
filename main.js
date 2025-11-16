@@ -338,7 +338,10 @@ function App() {
                     });
 
                     if (mapInstanceRef.current) {
-                        mapInstanceRef.current.setView([latitude, longitude], 15);
+                        mapInstanceRef.current.flyTo([latitude, longitude], 15, {
+                            animate: true,
+                            duration: 1.5
+                        });
                     }
                 }
             },
@@ -383,7 +386,10 @@ function App() {
                 });
 
                 if (mapInstanceRef.current) {
-                    mapInstanceRef.current.setView([simulatedLat, simulatedLon], 15);
+                    mapInstanceRef.current.flyTo([simulatedLat, simulatedLon], 15, {
+                        animate: true,
+                        duration: 1.5
+                    });
                 }
             }
         };
@@ -789,7 +795,10 @@ function App() {
                             className="member-item"
                             onClick={() => {
                                 if (data.lat && data.lon && mapInstanceRef.current) {
-                                    mapInstanceRef.current.setView([data.lat, data.lon], 16);
+                                    mapInstanceRef.current.flyTo([data.lat, data.lon], 16, {
+                                        animate: true,
+                                        duration: 1
+                                    });
                                     // Open the marker popup if it exists
                                     if (markersRef.current[userId]) {
                                         markersRef.current[userId].openPopup();
