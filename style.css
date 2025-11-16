@@ -190,16 +190,19 @@ h3 {
     justify-content: space-between;
     align-items: center;
     padding: 15px 20px;
-    background: #4a508e;
+    background: #3B2D7F;
     color: #d99449;
     border-bottom: 4px solid #479dc0;
     box-shadow: 0px 4px 0px #bf393e;
+    flex-wrap: wrap;
+    gap: 10px;
 }
 
 .header-info {
     display: flex;
     flex-direction: column;
     gap: 5px;
+    min-width: 120px;
 }
 
 .user-badge {
@@ -207,6 +210,15 @@ h3 {
     font-weight: bold;
     color: #bf393e;
     text-shadow: 1px 1px 0px #000;
+}
+
+/* Mobile responsive text */
+.mobile-show {
+    display: none;
+}
+
+.mobile-hide {
+    display: inline;
 }
 
 /* Map */
@@ -407,6 +419,49 @@ h3 {
 }
 
 /* Mobile Responsiveness */
+@media (max-width: 768px) {
+    .header {
+        padding: 10px 12px;
+        gap: 8px;
+    }
+
+    .header h2 {
+        font-size: 1.1rem;
+    }
+
+    .user-badge {
+        font-size: 0.8rem;
+    }
+
+    .btn-small {
+        padding: 6px 10px;
+        font-size: 0.75rem;
+        white-space: nowrap;
+    }
+
+    /* Show icon-only buttons on mobile */
+    .mobile-show {
+        display: inline;
+    }
+
+    .mobile-hide {
+        display: none;
+    }
+
+    /* Make buttons wrap better on mobile */
+    .header > div:last-child {
+        display: grid;
+        grid-template-columns: repeat(4, 1fr);
+        gap: 6px;
+        width: 100%;
+    }
+
+    .header > div:last-child button {
+        font-size: 1rem;
+        padding: 8px 4px;
+    }
+}
+
 @media (max-width: 480px) {
     .auth-container {
         padding: 30px 20px;
@@ -418,11 +473,26 @@ h3 {
     }
 
     .header {
-        padding: 12px 15px;
+        padding: 8px 10px;
+        gap: 6px;
     }
 
     .header h2 {
-        font-size: 1.2rem;
+        font-size: 0.95rem;
+    }
+
+    .user-badge {
+        font-size: 0.7rem;
+    }
+
+    .btn-small {
+        padding: 8px 4px;
+        font-size: 1.1rem;
+    }
+
+    /* Stack buttons in 3 columns on small mobile */
+    .header > div:last-child {
+        grid-template-columns: repeat(3, 1fr);
     }
 
     .members-panel {
