@@ -54,6 +54,8 @@ function App() {
     const [trailsLoading, setTrailsLoading] = useState(false);
     const [showSkiTrails, setShowSkiTrails] = useState(false);
     const [showMtbTrails, setShowMtbTrails] = useState(false);
+    const [groupAlerts, setGroupAlerts] = useState({});
+    const [showSosConfirm, setShowSosConfirm] = useState(false);
     const mapInstanceRef = useRef(null);
     const markersRef = useRef({});
     const pinMarkersRef = useRef({});
@@ -586,6 +588,42 @@ function App() {
         return () => locationsRef.off();
     }, [currentGroup]);
 
+    // Listen to SOS alerts
+    useEffect(() => {
+        if (!currentGroup) return;
+
+        const alertsRef = database.ref(`groups/${currentGroup}/alerts`);
+        
+        alertsRef.on('value', (snapshot) => {
+            const alerts = snapshot.val() || {};
+            setGroupAlerts(alerts);
+            
+            // Check for new alerts and show notification
+            const now = Date.now();
+            Object.entries(alerts).forEach(([alertId, data]) => {
+                // Only show alerts from last 30 seconds that aren't from current user
+                if (data.timestamp && (now - data.timestamp < 30000) && data.userId !== getUid()) {
+                    console.log('[SOS] Alert from', data.username);
+                    // Show browser notification if permitted
+                    if ('Notification' in window && Notification.permission === 'granted') {
+                        new Notification(`🆘 SOS from ${data.username}!`, {
+                            body: `Emergency alert at ${data.location || 'unknown location'}`,
+                            icon: '🆘',
+                            requireInteraction: true
+                        });
+                    }
+                }
+                
+                // Auto-delete alerts older than 10 minutes
+                if (data.timestamp && (now - data.timestamp > 600000)) {
+                    database.ref(`groups/${currentGroup}/alerts/${alertId}`).remove();
+                }
+            });
+        });
+
+        return () => alertsRef.off();
+    }, [currentGroup, user]);
+
     // Listen to group pins
     useEffect(() => {
         if (!currentGroup) return;
@@ -613,26 +651,34 @@ function App() {
                 // Add new pin markers
                 Object.entries(pins).forEach(([pinId, data]) => {
                     if (data.lat && data.lon) {
+                        // Different styling for SOS pins
+                        const isSOS = data.isSOS || data.label.includes('EMERGENCY');
+                        const pinColor = isSOS ? '#ff0000' : '#e74c3c';
+                        const strokeColor = isSOS ? '#cc0000' : '#c0392b';
+                        const labelStyle = isSOS ? 'background: #ff0000; color: white; padding: 4px 8px; border-radius: 4px; font-weight: bold; animation: pulse 1s infinite;' : '';
+                        
                         const pinIcon = L.divIcon({
                             className: 'pin-marker-container',
                             html: `<div class="pin-marker-wrapper">
-                                      <div class="pin-label">${data.label}${data.pinTime ? ' @ ' + data.pinTime : ''}</div>
-                                      <svg xmlns="http://www.w3.org/2000/svg" width="32" height="40" viewBox="0 0 32 40" class="pin-icon" style="display: block;">
-                                        <path fill="#e74c3c" stroke="#c0392b" stroke-width="2" d="M16 0C9.4 0 4 5.4 4 12c0 8 12 28 12 28s12-20 12-28c0-6.6-5.4-12-12-12z"/>
+                                      <div class="pin-label" style="${labelStyle}">${data.label}${data.pinTime ? ' @ ' + data.pinTime : ''}</div>
+                                      <svg xmlns="http://www.w3.org/2000/svg" width="${isSOS ? 40 : 32}" height="${isSOS ? 50 : 40}" viewBox="0 0 32 40" class="pin-icon" style="display: block; ${isSOS ? 'filter: drop-shadow(0 0 8px #ff0000);' : ''}">
+                                        <path fill="${pinColor}" stroke="${strokeColor}" stroke-width="2" d="M16 0C9.4 0 4 5.4 4 12c0 8 12 28 12 28s12-20 12-28c0-6.6-5.4-12-12-12z"/>
                                         <circle cx="16" cy="12" r="6" fill="white"/>
+                                        ${isSOS ? '<text x="16" y="15" font-size="10" font-weight="bold" fill="#ff0000" text-anchor="middle">!</text>' : ''}
                                       </svg>
                                    </div>`,
-                            iconSize: [80, 70],
-                            iconAnchor: [40, 65],
-                            popupAnchor: [0, -70]
+                            iconSize: isSOS ? [100, 80] : [80, 70],
+                            iconAnchor: isSOS ? [50, 75] : [40, 65],
+                            popupAnchor: [0, isSOS ? -80 : -70]
                         });
                         
                         const marker = L.marker([data.lat, data.lon], { icon: pinIcon })
                             .addTo(mapInstanceRef.current);
                         
                         let popupContent = `
-                            <div style="min-width: 200px;">
-                                <strong style="font-size: 16px;">${data.label}</strong><br>
+                            <div style="min-width: 200px; ${isSOS ? 'border: 3px solid #ff0000; padding: 8px; border-radius: 8px;' : ''}">
+                                ${isSOS ? '<div style="font-size: 32px; text-align: center; margin-bottom: 8px;">🆘</div>' : ''}
+                                <strong style="font-size: 16px; ${isSOS ? 'color: #ff0000;' : ''}">${data.label}</strong><br>
                         `;
                         
                         // Add trail information if this is a trail pin
@@ -651,11 +697,17 @@ function App() {
                                 <strong>By:</strong> ${data.createdBy}<br>
                                 <strong>Created:</strong> ${new Date(data.createdAt).toLocaleTimeString()}<br>
                                 <strong>Expires:</strong> ${new Date(data.expiresAt).toLocaleTimeString()}<br>
+                                ${isSOS ? '<p style="color: #ff0000; font-weight: bold; margin-top: 8px;">⚠️ EMERGENCY ASSISTANCE NEEDED</p>' : ''}
                                 <button onclick="if(confirm('Delete this pin?')) { firebase.database().ref('groups/${currentGroup}/pins/${pinId}').remove(); }" style="margin-top:8px;padding:4px 8px;background:#e74c3c;color:white;border:none;border-radius:4px;cursor:pointer;">Delete Pin</button>
                             </div>
                         `;
                         
                         marker.bindPopup(popupContent);
+                        
+                        // Auto-open SOS pins
+                        if (isSOS && data.createdBy !== username) {
+                            setTimeout(() => marker.openPopup(), 500);
+                        }
                         
                         pinMarkersRef.current[pinId] = marker;
                     }
@@ -1000,6 +1052,70 @@ function App() {
         }
     };
 
+    // Send SOS alert to group
+    const handleSOS = async () => {
+        if (!currentGroup || !user) return;
+        
+        const uid = getUid();
+        if (!uid) return;
+        
+        console.log('[SOS] Sending emergency alert');
+        
+        // Request notification permission if not already granted
+        if ('Notification' in window && Notification.permission === 'default') {
+            await Notification.requestPermission();
+        }
+        
+        // Get current location from Firebase or use map center
+        let lat, lon, location;
+        try {
+            const locationSnap = await database.ref(`groups/${currentGroup}/locations/${uid}`).once('value');
+            const locationData = locationSnap.val();
+            if (locationData) {
+                lat = locationData.lat;
+                lon = locationData.lon;
+                location = `${lat.toFixed(4)}, ${lon.toFixed(4)}`;
+            } else if (mapInstanceRef.current) {
+                const center = mapInstanceRef.current.getCenter();
+                lat = center.lat;
+                lon = center.lng;
+                location = `${lat.toFixed(4)}, ${lon.toFixed(4)}`;
+            }
+        } catch (e) {
+            console.warn('[SOS] Could not get location:', e);
+        }
+        
+        // Create SOS alert
+        const alertId = Date.now().toString();
+        await database.ref(`groups/${currentGroup}/alerts/${alertId}`).set({
+            userId: uid,
+            username: username,
+            timestamp: Date.now(),
+            lat: lat,
+            lon: lon,
+            location: location,
+            type: 'SOS'
+        });
+        
+        // Also create a pin at the location
+        if (lat && lon) {
+            const pinId = `sos_${alertId}`;
+            await database.ref(`groups/${currentGroup}/pins/${pinId}`).set({
+                lat: lat,
+                lon: lon,
+                label: `🆘 EMERGENCY - ${username}`,
+                pinTime: new Date().toLocaleTimeString(),
+                createdBy: username,
+                createdAt: Date.now(),
+                expiresAt: Date.now() + (30 * 60 * 1000), // 30 minutes
+                isSOS: true
+            });
+        }
+        
+        setShowSosConfirm(false);
+        alert('🆘 SOS Alert sent to all group members!');
+    };
+
     // Create new group with generated code
     const handleCreateGroup = async () => {
         if (!username.trim()) {
@@ -1227,6 +1343,13 @@ function App() {
                     >
                         {showMtbTrails ? '🚴 MTB Trails ON' : '🚴 MTB Trails'}
                     </button>
+                    <button 
+                        onClick={() => setShowSosConfirm(true)} 
+                        className="btn btn-small"
+                        style={{ background: '#ff0000', color: 'white', fontWeight: 'bold' }}
+                    >
+                        🆘 SOS
+                    </button>
                     <button onClick={handleLeaveGroup} className="btn btn-small">
                         Leave
                     </button>
@@ -1342,6 +1465,57 @@ function App() {
                                 style={{ width: 'auto' }}
                             >
                                 Try Again
+                            </button>
+                        </div>
+                    </div>
+                </div>
+            )}
+            
+            {showSosConfirm && (
+                <div style={{
+                    position: 'fixed',
+                    inset: 0,
+                    background: 'rgba(0,0,0,0.7)',
+                    display: 'flex',
+                    alignItems: 'center',
+                    justifyContent: 'center',
+                    zIndex: 10001
+                }}>
+                    <div style={{
+                        background: '#fff',
+                        borderRadius: 12,
+                        padding: 24,
+                        width: '90%',
+                        maxWidth: 400,
+                        boxShadow: '0 10px 30px rgba(0,0,0,0.3)',
+                        border: '4px solid #ff0000',
+                        textAlign: 'center'
+                    }}>
+                        <div style={{ fontSize: '48px', marginBottom: 16 }}>🆘</div>
+                        <h2 style={{ color: '#ff0000', marginBottom: 16 }}>Send SOS Alert?</h2>
+                        <p style={{ marginBottom: 20, color: '#333', fontSize: '16px' }}>
+                            This will immediately notify all group members that you need emergency assistance.
+                            Your location will be shared with the group.
+                        </p>
+                        <div style={{ display: 'flex', gap: 12, justifyContent: 'center' }}>
+                            <button
+                                className="btn btn-secondary"
+                                onClick={() => setShowSosConfirm(false)}
+                                style={{ minWidth: '120px' }}
+                            >
+                                Cancel
+                            </button>
+                            <button
+                                className="btn"
+                                onClick={handleSOS}
+                                style={{ 
+                                    background: '#ff0000', 
+                                    color: 'white', 
+                                    fontWeight: 'bold',
+                                    minWidth: '120px'
+                                }}
+                            >
+                                🆘 Send SOS
                             </button>
                         </div>
                     </div>
