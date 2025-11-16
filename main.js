@@ -232,24 +232,22 @@ function App() {
                                            'Ski Trail';
                             
                             // Color by difficulty (international standard)
-                            const difficulty = tags['piste:difficulty'];
-                            // Updated color mapping per request:
-                            // Beginner (novice/easy) -> Green, Intermediate -> Blue
-                            // Retain existing colors for higher difficulties.
-                            if (difficulty && ['novice','easy','green','green_easy'].includes(difficulty)) {
+                            const d = (tags['piste:difficulty'] || '').toLowerCase();
+                            // Beginner (novice/easy/green) -> Green
+                            // Intermediate (intermediate/blue) -> Blue
+                            // Advanced/Expert (black) -> Black; Freeride/Extreme -> Orange; Red stays Red.
+                            if (['novice','easy','green','green_easy'].includes(d)) {
                                 color = '#00c853'; // Green (Beginner)
-                            } else if (difficulty === 'intermediate') {
+                            } else if (['intermediate','blue'].includes(d)) {
                                 color = '#0066ff'; // Blue (Intermediate)
-                            } else if (difficulty === 'advanced' || difficulty === 'expert') {
-                                color = '#000000'; // Black
-                            } else if (difficulty === 'freeride' || difficulty === 'extreme') {
-                                color = '#ff6600'; // Extreme / freeride
-                            } else if (difficulty === 'advanced' || difficulty === 'expert') {
-                                color = '#000000'; // Black
-                            } else if (difficulty === 'freeride' || difficulty === 'extreme') {
-                                color = '#ff6600'; // Orange/yellow for extreme
+                            } else if (['advanced','expert','black','black_diamond'].includes(d)) {
+                                color = '#000000'; // Black (Advanced/Expert)
+                            } else if (['freeride','extreme'].includes(d)) {
+                                color = '#ff6600'; // Orange (Freeride/Extreme)
+                            } else if (d === 'red') {
+                                color = '#ff0000'; // Red (common EU grading)
                             } else {
-                                color = '#0088cc'; // Default blue
+                                color = '#0088cc'; // Default blue-ish
                             }
                             width = 5;
                         } else if (trailType === 'mtb') {
