@@ -62,6 +62,15 @@ function App() {
     const mapRef = useRef(null);
     const skiTrailLayersRef = useRef([]);
     const mtbTrailLayersRef = useRef([]);
+    const trailLayersMapRef = useRef({});
+    const pinnedTrailIdRef = useRef(null);
+    const highlightedTrailIdsRef = useRef(new Set()); // Persistent across trail toggle
+    // Auto-center control: when user moves the map, stop auto-centering on location updates
+    const autoCenterRef = useRef(true);
+    // Store last known own location so the "return to me" button can use it
+    const lastOwnLocationRef = useRef(null);
+    // Starting/default map center (used when user has no location)
+    const startPositionRef = useRef([42.7285, -73.6852]);
 
 
 
@@ -105,9 +114,10 @@ function App() {
         // Determine which layers to clear and use
         const layersRef = trailType === 'ski' ? skiTrailLayersRef : mtbTrailLayersRef;
         
-        // Clear old trails of this type
+        // Clear old trails of this type and remove mapping entries
         layersRef.current.forEach(layer => {
             try {
+                if (layer && layer.trailId) delete trailLayersMapRef.current[layer.trailId];
                 map.removeLayer(layer);
             } catch (e) {
                 // Layer might already be removed
@@ -283,9 +293,16 @@ function App() {
                         const polyline = L.polyline(coords, {
                             color: color,
                             weight: width,
-                            opacity: 0.8,
+                            opacity: 0.7,
                             smoothFactor: 1
                         }).addTo(map);
+                        // Store metadata for highlighting when pinned
+                        polyline.trailId = el.id;
+                        polyline._originalWeight = width;
+                        polyline._baseOpacity = 0.5;        // Base opacity (all the time)
+                        polyline._highlightOpacity = 0.95;  // Higher opacity when pinned
+                        polyline._highlighted = false;      // Persistent highlight state
+                        trailLayersMapRef.current[el.id] = polyline;
                         
                         drawnWays.add(el.id);
                         trailsDrawn++;
@@ -328,6 +345,7 @@ function App() {
                         
                         // Store trail info when clicked
                         const trailInfo = {
+                            id: el.id,
                             name: name,
                             type: trailTypeName,
                             difficulty: difficulty,
@@ -343,14 +361,6 @@ function App() {
                         
                         // Store trail layer for cleanup
                         layersRef.current.push(polyline);
-                        
-                        // Highlight on hover
-                        polyline.on('mouseover', function() {
-                            this.setStyle({ weight: width + 3, opacity: 1 });
-                        });
-                        polyline.on('mouseout', function() {
-                            this.setStyle({ weight: width, opacity: 0.8 });
-                        });
                     }
                 }
             });
@@ -360,6 +370,9 @@ function App() {
             if (trailsDrawn === 0) {
                 console.log(`[Trails] Warning: Found elements but no valid ${trailType} trails to display.`);
             }
+            
+            // Restore any persistent highlights based on _highlighted state
+            restoreTrailHighlights();
         } catch (error) {
             console.error(`[Trails] Error fetching ${trailType} trail data:`, error);
         } finally {
@@ -374,27 +387,27 @@ function App() {
         if (mapInstanceRef.current) return; // Already initialized
         try {
             console.log('[Map] Initializing map for group', currentGroup);
-            const map = L.map(mapRef.current).setView([42.7285, -73.6852], 13);
-            
-            // Base layer - Outdoor/Topographic map
-            L.tileLayer('https://{s}.tile.opentopomap.org/{z}/{x}/{y}.png', {
-                attribution: '© OpenStreetMap contributors, SRTM | © OpenTopoMap',
-                maxZoom: 17
-            }).addTo(map);
-            
-            // Layer control to toggle between base maps only
+            const map = L.map(mapRef.current).setView(startPositionRef.current, 13);
+
+            // Layer control to toggle between base maps; default to Standard (OSM)
             const baseLayers = {
                 'Topographic': L.tileLayer('https://{s}.tile.opentopomap.org/{z}/{x}/{y}.png', {
                     attribution: '© OpenStreetMap contributors, SRTM | © OpenTopoMap',
                     maxZoom: 17
-                }).addTo(map),
+                }),
                 'Standard': L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
                     attribution: '© OpenStreetMap contributors',
                     maxZoom: 18
-                })
+                }).addTo(map)
             };
             
             L.control.layers(baseLayers, {}).addTo(map);
+
+            // When the user moves the map, disable automatic recentering on location updates
+            map.on('movestart', () => {
+                autoCenterRef.current = false;
+                console.log('[Map] User moved map - disabling auto-center');
+            });
             
             // Don't auto-load trails - let user toggle them with buttons
             
@@ -457,6 +470,38 @@ function App() {
     useEffect(() => {
         initMapIfNeeded();
     }, [currentGroup]);
+
+    // Auto-apply trails based on selected sport when the map is ready
+    useEffect(() => {
+        if (!mapInstanceRef.current) return;
+        if (sport === 'ski') {
+            // Hide MTB if it was on
+            if (showMtbTrails) {
+                mtbTrailLayersRef.current.forEach(layer => {
+                    try { mapInstanceRef.current.removeLayer(layer); } catch (e) {}
+                });
+                mtbTrailLayersRef.current = [];
+                setShowMtbTrails(false);
+            }
+            if (!showSkiTrails) {
+                setShowSkiTrails(true);
+                fetchAndDisplayTrails(mapInstanceRef.current, 'ski');
+            }
+        } else if (sport === 'bike') {
+            // Hide ski if it was on
+            if (showSkiTrails) {
+                skiTrailLayersRef.current.forEach(layer => {
+                    try { mapInstanceRef.current.removeLayer(layer); } catch (e) {}
+                });
+                skiTrailLayersRef.current = [];
+                setShowSkiTrails(false);
+            }
+            if (!showMtbTrails) {
+                setShowMtbTrails(true);
+                fetchAndDisplayTrails(mapInstanceRef.current, 'mtb');
+            }
+        }
+    }, [sport, currentGroup]);
 
     // Update pinMode ref and attach/detach click handler
     useEffect(() => {
@@ -660,6 +705,26 @@ function App() {
                         pinMarkersRef.current[pinId] = marker;
                     }
                 });
+
+                // Determine pinned trail ids and manage highlighting
+                const pinnedIds = new Set(Object.values(pins).map(p => p && p.trail && p.trail.id).filter(Boolean));
+                // Clear highlighting from trails no longer pinned
+                Object.values(trailLayersMapRef.current || {}).forEach(layer => {
+                    if (!layer || !layer.trailId) return;
+                    if (!pinnedIds.has(layer.trailId) && layer._highlighted) {
+                        setTrailHighlighted(layer.trailId, false);
+                    }
+                });
+                // Highlight the most recent pinned trail
+                if (pinnedIds.size > 0) {
+                    const entries = Object.entries(pins)
+                        .filter(([_, d]) => d && d.trail && d.trail.id)
+                        .sort((a, b) => (b[1].createdAt || 0) - (a[1].createdAt || 0));
+                    if (entries.length) {
+                        const chosen = entries[0][1].trail.id;
+                        if (chosen) setTrailHighlighted(chosen, true);
+                    }
+                }
             }
         });
 
@@ -735,7 +800,9 @@ function App() {
                         console.error('❌ Error saving to Firebase:', err);
                     });
 
-                    if (mapInstanceRef.current) {
+                    // Save last own location and only auto-center if autoCenterRef allows it
+                    lastOwnLocationRef.current = [latitude, longitude];
+                    if (mapInstanceRef.current && autoCenterRef.current) {
                         mapInstanceRef.current.flyTo([latitude, longitude], 15, {
                             animate: true,
                             duration: 1.5
@@ -784,7 +851,9 @@ function App() {
                     console.error('❌ Error saving to Firebase:', err);
                 });
 
-                if (mapInstanceRef.current) {
+                // Update last own location and only move map if auto-centering is enabled
+                lastOwnLocationRef.current = [simulatedLat, simulatedLon];
+                if (mapInstanceRef.current && autoCenterRef.current) {
                     mapInstanceRef.current.flyTo([simulatedLat, simulatedLon], 15, {
                         animate: true,
                         duration: 1.5
@@ -1000,6 +1069,59 @@ function App() {
         }
     };
 
+    // Set trail as highlighted (pinned) — persistent opacity and weight increase
+    const setTrailHighlighted = (trailId, isHighlighted) => {
+        try {
+            const layer = trailLayersMapRef.current[trailId];
+            if (!layer) return;
+            layer._highlighted = isHighlighted;
+            if (isHighlighted) {
+                layer.setStyle({ 
+                    opacity: layer._highlightOpacity || 0.95, 
+                    weight: (layer._originalWeight || 4) + 3 
+                });
+                if (typeof layer.bringToFront === 'function') layer.bringToFront();
+                highlightedTrailIdsRef.current.add(trailId);
+            } else {
+                layer.setStyle({ 
+                    opacity: layer._baseOpacity || 0.5, 
+                    weight: (layer._originalWeight || 4) 
+                });
+                if (typeof layer.bringToBack === 'function') layer.bringToBack();
+                highlightedTrailIdsRef.current.delete(trailId);
+            }
+            pinnedTrailIdRef.current = isHighlighted ? trailId : null;
+        } catch (e) {
+            console.warn('Error setting trail highlight:', e);
+        }
+    };
+
+    // Re-apply styles based on _highlighted state and persistent highlightedTrailIdsRef
+    const restoreTrailHighlights = () => {
+        try {
+            const allLayers = Object.values(trailLayersMapRef.current || {});
+            allLayers.forEach(layer => {
+                if (!layer) return;
+                // Check both the layer's _highlighted state AND the persistent ref
+                const shouldHighlight = layer._highlighted || highlightedTrailIdsRef.current.has(layer.trailId);
+                layer._highlighted = shouldHighlight;
+                if (shouldHighlight) {
+                    layer.setStyle({ 
+                        opacity: layer._highlightOpacity || 0.95, 
+                        weight: (layer._originalWeight || 4) + 3 
+                    });
+                } else {
+                    layer.setStyle({ 
+                        opacity: layer._baseOpacity || 0.5, 
+                        weight: (layer._originalWeight || 4) 
+                    });
+                }
+            });
+        } catch (e) {
+            console.warn('Error restoring trail highlights:', e);
+        }
+    };
+
     // Create new group with generated code
     const handleCreateGroup = async () => {
         if (!username.trim()) {
@@ -1203,6 +1325,11 @@ function App() {
                                     lng: selectedTrail.location[1] 
                                 });
                                 setPinLabel(selectedTrail.name);
+                                // Pre-fill pin time with current time
+                                const now = new Date();
+                                const hh = String(now.getHours()).padStart(2, '0');
+                                const mm = String(now.getMinutes()).padStart(2, '0');
+                                setPinTime(`${hh}:${mm}`);
                                 setShowPinModal(true);
                             }}
                             className="btn btn-small"
@@ -1226,6 +1353,23 @@ function App() {
                         disabled={trailsLoading}
                     >
                         {showMtbTrails ? '🚴 MTB Trails ON' : '🚴 MTB Trails'}
+                    </button>
+                    <button onClick={() => {
+                            if (mapInstanceRef.current) {
+                                // Return to last own location if available, otherwise start position
+                                const own = lastOwnLocationRef.current;
+                                if (own && own.length === 2) {
+                                    mapInstanceRef.current.flyTo(own, 15, { animate: true, duration: 1.2 });
+                                } else {
+                                    mapInstanceRef.current.flyTo(startPositionRef.current, 13, { animate: true, duration: 1.2 });
+                                }
+                                // Re-enable auto-center so subsequent updates center again until user moves map
+                                autoCenterRef.current = true;
+                            }
+                        }}
+                        className="btn btn-small"
+                    >
+                        📍 My Location
                     </button>
                     <button onClick={handleLeaveGroup} className="btn btn-small">
                         Leave
@@ -1438,6 +1582,7 @@ function App() {
                                         // Add trail info if this is a trail pin
                                         if (selectedTrail) {
                                             pinData.trail = {
+                                                id: selectedTrail.id,
                                                 name: selectedTrail.name,
                                                 type: selectedTrail.type,
                                                 difficulty: selectedTrail.difficulty,
@@ -1446,6 +1591,10 @@ function App() {
                                         }
                                         
                                         database.ref(`groups/${currentGroup}/pins/${pinId}`).set(pinData);
+                                        // Highlight the pinned trail on the map (if available)
+                                        if (selectedTrail && selectedTrail.id) {
+                                            setTrailHighlighted(selectedTrail.id, true);
+                                        }
                                         setShowPinModal(false);
                                         setPinLabel('');
                                         setPinTime('');
