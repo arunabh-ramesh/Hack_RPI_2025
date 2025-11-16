@@ -591,6 +591,18 @@ function App() {
                 console.warn('Error removing presence on leave:', e);
             }
         }
+
+        // Clean up map instance
+        if (mapInstanceRef.current) {
+            try {
+                mapInstanceRef.current.remove();
+            } catch (e) {
+                console.warn('Map remove failed', e);
+            }
+            mapInstanceRef.current = null;
+        }
+        markersRef.current = {};
+        pinMarkersRef.current = {};
         
         setCurrentGroup(null);
         setGroupCode('');
