@@ -230,12 +230,17 @@ function App() {
                             
                             // Color by difficulty (international standard)
                             const difficulty = tags['piste:difficulty'];
-                            if (difficulty === 'novice') {
-                                color = '#00ff00'; // Green
-                            } else if (difficulty === 'easy') {
-                                color = '#0066ff'; // Blue
+                            // Updated color mapping per request:
+                            // Beginner (novice/easy) -> Green, Intermediate -> Blue
+                            // Retain existing colors for higher difficulties.
+                            if (difficulty && ['novice','easy','green','green_easy'].includes(difficulty)) {
+                                color = '#00c853'; // Green (Beginner)
                             } else if (difficulty === 'intermediate') {
-                                color = '#ff0000'; // Red
+                                color = '#0066ff'; // Blue (Intermediate)
+                            } else if (difficulty === 'advanced' || difficulty === 'expert') {
+                                color = '#000000'; // Black
+                            } else if (difficulty === 'freeride' || difficulty === 'extreme') {
+                                color = '#ff6600'; // Extreme / freeride
                             } else if (difficulty === 'advanced' || difficulty === 'expert') {
                                 color = '#000000'; // Black
                             } else if (difficulty === 'freeride' || difficulty === 'extreme') {
